@@ -53,7 +53,7 @@ HTML_TEMPLATE = """
             min-height: 100vh;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         h1 {
@@ -76,10 +76,141 @@ HTML_TEMPLATE = """
             margin: 20px 0;
             font-weight: bold;
             text-shadow: 3px 3px 6px rgba(0,0,0,0.5);
+            padding: 20px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
         }
-        .signal-buy { color: #4ade80; }
-        .signal-sell { color: #f87171; }
-        .signal-neutral { color: #94a3b8; }
+        .signal-buy { color: #4ade80; border: 3px solid #4ade80; }
+        .signal-sell { color: #f87171; border: 3px solid #f87171; }
+        .signal-neutral { color: #94a3b8; border: 3px solid #94a3b8; }
+        
+        /* NOUVEAU: Visuel des signaux */
+        .signals-visual {
+            margin: 30px 0;
+            padding: 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+        }
+        .signals-header {
+            text-align: center;
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .signals-balance {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .signal-counter {
+            flex: 1;
+            text-align: center;
+            padding: 20px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            transition: all 0.3s;
+        }
+        .signal-counter.buy {
+            border: 2px solid #4ade80;
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
+        }
+        .signal-counter.sell {
+            border: 2px solid #f87171;
+            box-shadow: 0 0 20px rgba(248, 113, 113, 0.3);
+        }
+        .signal-counter-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 10px;
+        }
+        .signal-counter-value {
+            font-size: 3em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .signal-counter.buy .signal-counter-value { color: #4ade80; }
+        .signal-counter.sell .signal-counter-value { color: #f87171; }
+        
+        .signals-impact-bar {
+            width: 100%;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 25px;
+            overflow: hidden;
+            position: relative;
+            margin: 20px 0;
+        }
+        .impact-buy {
+            height: 100%;
+            background: linear-gradient(90deg, #4ade80, #22c55e);
+            float: left;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .impact-sell {
+            height: 100%;
+            background: linear-gradient(90deg, #f87171, #ef4444);
+            float: right;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .impact-neutral {
+            height: 100%;
+            background: rgba(148, 163, 184, 0.5);
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        
+        .reasons-section {
+            margin-top: 30px;
+        }
+        .reasons-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .reasons-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 10px;
+        }
+        .reason-item {
+            padding: 12px 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            border-left: 4px solid;
+            font-size: 0.9em;
+            transition: all 0.3s;
+        }
+        .reason-item.buy-reason {
+            border-left-color: #4ade80;
+        }
+        .reason-item.sell-reason {
+            border-left-color: #f87171;
+        }
+        .reason-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
+        }
+        
         .info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -161,6 +292,31 @@ HTML_TEMPLATE = """
                 Chargement...
             </div>
             
+            <!-- NOUVEAU: Visuel des signaux -->
+            <div class="signals-visual">
+                <div class="signals-header">📊 Impact des Signaux sur la Décision</div>
+                
+                <div class="signals-balance">
+                    <div class="signal-counter buy" id="buy-counter">
+                        <div class="signal-counter-label">🟢 Signaux d'ACHAT</div>
+                        <div class="signal-counter-value" id="buy-signals">0</div>
+                    </div>
+                    <div class="signal-counter sell" id="sell-counter">
+                        <div class="signal-counter-label">🔴 Signaux de VENTE</div>
+                        <div class="signal-counter-value" id="sell-signals">0</div>
+                    </div>
+                </div>
+                
+                <div class="signals-impact-bar" id="impact-bar">
+                    <div class="impact-neutral">NEUTRE</div>
+                </div>
+                
+                <div class="reasons-section" id="reasons-section" style="display: none;">
+                    <div class="reasons-title">📋 Raisons des Signaux</div>
+                    <div class="reasons-list" id="reasons-list"></div>
+                </div>
+            </div>
+            
             <div class="info-grid" id="info-grid">
                 <div class="info-item">
                     <div class="info-label">Coin</div>
@@ -204,16 +360,96 @@ HTML_TEMPLATE = """
         let autoRefresh = true;
         let refreshInterval;
 
+        function updateSignalsVisual(buySignals, sellSignals, reasons) {
+            // Mettre à jour les compteurs
+            document.getElementById('buy-signals').textContent = buySignals;
+            document.getElementById('sell-signals').textContent = sellSignals;
+            
+            // Calculer le pourcentage pour la barre d'impact
+            const total = buySignals + sellSignals;
+            let buyPercent = 0;
+            let sellPercent = 0;
+            
+            if (total > 0) {
+                buyPercent = (buySignals / total) * 100;
+                sellPercent = (sellSignals / total) * 100;
+            }
+            
+            // Mettre à jour la barre d'impact
+            const impactBar = document.getElementById('impact-bar');
+            impactBar.innerHTML = '';
+            
+            if (buySignals > sellSignals) {
+                impactBar.innerHTML = `
+                    <div class="impact-buy" style="width: ${buyPercent}%">
+                        ACHAT ${buyPercent.toFixed(0)}%
+                    </div>
+                `;
+            } else if (sellSignals > buySignals) {
+                impactBar.innerHTML = `
+                    <div class="impact-sell" style="width: ${sellPercent}%">
+                        VENTE ${sellPercent.toFixed(0)}%
+                    </div>
+                `;
+            } else {
+                impactBar.innerHTML = '<div class="impact-neutral">NEUTRE</div>';
+            }
+            
+            // Mettre à jour les raisons
+            const reasonsSection = document.getElementById('reasons-section');
+            const reasonsList = document.getElementById('reasons-list');
+            
+            if (reasons && reasons.length > 0) {
+                reasonsSection.style.display = 'block';
+                reasonsList.innerHTML = '';
+                
+                reasons.forEach(reason => {
+                    const reasonItem = document.createElement('div');
+                    reasonItem.className = 'reason-item';
+                    
+                    // Déterminer si c'est une raison d'achat ou de vente
+                    if (reason.toLowerCase().includes('achat') || 
+                        reason.toLowerCase().includes('buy') ||
+                        reason.toLowerCase().includes('haussier') ||
+                        reason.toLowerCase().includes('survendu') ||
+                        reason.toLowerCase().includes('golden') ||
+                        reason.toLowerCase().includes('au-dessus')) {
+                        reasonItem.classList.add('buy-reason');
+                    } else if (reason.toLowerCase().includes('vente') || 
+                               reason.toLowerCase().includes('sell') ||
+                               reason.toLowerCase().includes('baissier') ||
+                               reason.toLowerCase().includes('suracheté') ||
+                               reason.toLowerCase().includes('death') ||
+                               reason.toLowerCase().includes('en-dessous')) {
+                        reasonItem.classList.add('sell-reason');
+                    }
+                    
+                    reasonItem.textContent = reason;
+                    reasonsList.appendChild(reasonItem);
+                });
+            } else {
+                reasonsSection.style.display = 'none';
+            }
+        }
+
         function updateDisplay(data) {
             const signal = data.signal || 'NEUTRE';
             const quality = data.signal_quality || 0;
+            const buySignals = data.buy_signals || 0;
+            const sellSignals = data.sell_signals || 0;
+            const reasons = data.reasons || [];
             
+            // Mettre à jour le signal principal
             const display = document.getElementById('signal-display');
             display.textContent = signal;
             display.className = 'signal-display ' + 
                 (signal === 'ACHAT' || signal === 'BUY' ? 'signal-buy' : 
                  signal === 'VENTE' || signal === 'SELL' ? 'signal-sell' : 'signal-neutral');
             
+            // Mettre à jour le visuel des signaux
+            updateSignalsVisual(buySignals, sellSignals, reasons);
+            
+            // Mettre à jour les autres informations
             document.getElementById('coin').textContent = data.coin || '-';
             document.getElementById('price').textContent = data.current_price ? '$' + parseFloat(data.current_price).toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-';
             document.getElementById('quality').textContent = quality.toFixed(1) + '/100';
@@ -297,6 +533,7 @@ def monitor_signals():
                 analysis = signal_generator.analyze()
                 
                 if 'error' not in analysis:
+                    signal_details = analysis.get('signal_details', {})
                     current_signal = {
                         'signal': analysis.get('signal', 'NEUTRE'),
                         'signal_quality': analysis.get('signal_quality', 0),
@@ -304,6 +541,10 @@ def monitor_signals():
                         'coin': signal_generator.coin,
                         'indicators': analysis.get('indicators', {}),
                         'volume_ratio': analysis.get('volume_ratio', 0),
+                        'signal_details': signal_details,
+                        'buy_signals': signal_details.get('buy_signals', 0),
+                        'sell_signals': signal_details.get('sell_signals', 0),
+                        'reasons': signal_details.get('reasons', []),
                         'timestamp': datetime.now().isoformat()
                     }
                     last_update = datetime.now()
@@ -339,6 +580,11 @@ def get_signal():
         
         analysis = signal_generator.analyze()
         if 'error' not in analysis:
+            signal_details = analysis.get('signal_details', {})
+            # Debug: vérifier si signal_details est présent
+            if not signal_details:
+                logger.warning(f"signal_details manquant dans analysis. Keys: {list(analysis.keys())}")
+            
             current_signal = {
                 'signal': analysis.get('signal', 'NEUTRE'),
                 'signal_quality': analysis.get('signal_quality', 0),
@@ -346,6 +592,10 @@ def get_signal():
                 'coin': signal_generator.coin,
                 'indicators': analysis.get('indicators', {}),
                 'volume_ratio': analysis.get('volume_ratio', 0),
+                'signal_details': signal_details,
+                'buy_signals': signal_details.get('buy_signals', 0) if signal_details else 0,
+                'sell_signals': signal_details.get('sell_signals', 0) if signal_details else 0,
+                'reasons': signal_details.get('reasons', []) if signal_details else [],
                 'timestamp': datetime.now().isoformat()
             }
             return jsonify(current_signal)
