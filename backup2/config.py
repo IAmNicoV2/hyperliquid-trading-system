@@ -17,9 +17,6 @@ DEFAULT_COIN = "BTC"
 DEFAULT_INTERVAL = "5m"  # OPTIMISÉ: 5m pour moins de noise
 DEFAULT_CANDLE_LIMIT = 200
 
-# Coins supportés pour le trading
-SUPPORTED_COINS = ["BTC", "ETH", "SOL", "HYPE", "ARB"]
-
 # Multi-timeframe pour scalping
 MULTI_TIMEFRAME = ["1m", "5m", "15m"]  # 1m signal, 5m trend, 15m contexte
 
@@ -171,7 +168,7 @@ WALL_DISTANCE_THRESHOLD = 0.01  # 1% du prix pour être considéré comme "proch
 # ============================================================================
 # FILTRES D'ENTRÉE ULTRA-STRICTS
 # ============================================================================
-SIGNAL_QUALITY_THRESHOLD = 60  # Ajusté selon analyse : 78 → 60 pour générer des trades (24.5% signaux BTC, 49.8% HYPE)
+SIGNAL_QUALITY_THRESHOLD = 78  # Légèrement assoupli de 82 à 78 (bon compromis)
 MIN_SIGNAL_CONFLUENCE = 4  # Minimum 4 indicateurs alignés
 MIN_VOLUME_MULTIPLIER = 2.2  # Légèrement assoupli de 2.5 à 2.2 pour plus de trades
 MAX_SPREAD_PERCENT = 0.03  # Réduire de 0.04 à 0.03
