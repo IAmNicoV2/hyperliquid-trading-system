@@ -59,7 +59,7 @@ BREAK_EVEN_ACTIVATION = 0.5  # Break-even dès +0.5%
 BREAKEVEN_THRESHOLD = 0.5
 
 # Stop Loss temporel
-SL_TIME_MINUTES = 15  # Fermer position si aucun profit après 15 minutes
+SL_TIME_MINUTES = 10  # Réduire à 10 min pour limiter les pertes (au lieu de 15)utes
 
 # Configuration des frais Hyperliquid (mis à jour 2024-2025)
 # Basé sur le volume de trading sur 14 jours
@@ -204,7 +204,7 @@ REQUIRE_TREND_ALIGNMENT = True  # Trader uniquement avec trend
 MIN_TREND_STRENGTH = 0.6  # EMA20/EMA50 ratio min
 
 # VALIDATION CONTEXTE
-VALIDATION_CONTEXT_MIN_CHECKS = 5  # Minimum 5/6 critères (réduire à 4 pour tests)
+VALIDATION_CONTEXT_MIN_CHECKS = 4  # Réduit à 4/6 pour plus de flexibilité (au lieu de 5/6)
 
 # ============================================================================
 # ORDER BOOK PROFOND
