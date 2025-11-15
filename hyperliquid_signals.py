@@ -1653,6 +1653,10 @@ class HyperliquidSignalGenerator:
         stochastic = indicators.get('stochastic', {})
         williams_r = indicators.get('williams_r', -50)
         
+        # Vérifier que les indicateurs sont valides
+        if ema20 == 0 or ema50 == 0:
+            return False, "Indicateurs EMA non calculés"
+        
         context_valid, context_checks, context_score = self.validate_signal_context(
             signal_type, rsi, ema20, ema50, current_price, macd, 
             stochastic, williams_r, volume_ratio

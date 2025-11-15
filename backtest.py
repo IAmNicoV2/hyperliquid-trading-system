@@ -71,9 +71,9 @@ class ScalpingBacktest:
         
         logger.info(f"✅ Backtest initialisé: Capital=${self.initial_capital:,.2f}, Slippage={self.slippage*100:.3f}%")
     
-    def load_historical_data(self, coin: str, interval: str = "1m", days: int = 30) -> List[Dict]:
+    def load_historical_data(self, coin: str, interval: str = "5m", days: int = 30) -> List[Dict]:
         """
-        Charge les données historiques depuis Hyperliquid
+        Charge les données historiques depuis Hyperliquid (chargement par lots si nécessaire)
         
         Args:
             coin: Symbole de la crypto
@@ -95,10 +95,34 @@ class ScalpingBacktest:
                 '4h': 6,
                 '1d': 1
             }
-            candles_needed = intervals_per_day.get(interval, 1440) * days
+            candles_needed = intervals_per_day.get(interval, 288) * days
             
             logger.info(f"📥 Chargement de {candles_needed} chandeliers pour {coin} ({interval})...")
-            candles = generator.fetch_historical_candles(limit=min(candles_needed, 2000))
+            
+            # Charger par lots de 2000 (limite API)
+            all_candles = []
+            max_per_request = 2000
+            
+            if candles_needed <= max_per_request:
+                candles = generator.fetch_historical_candles(limit=candles_needed)
+                all_candles.extend(candles if candles else [])
+            else:
+                # Charger plusieurs lots
+                num_requests = (candles_needed // max_per_request) + 1
+                logger.info(f"   Chargement en {num_requests} lots...")
+                
+                for i in range(num_requests):
+                    limit = min(max_per_request, candles_needed - len(all_candles))
+                    if limit <= 0:
+                        break
+                    candles = generator.fetch_historical_candles(limit=limit)
+                    if candles:
+                        all_candles.extend(candles)
+                        logger.info(f"   Lot {i+1}/{num_requests}: {len(candles)} chandeliers chargés")
+                    else:
+                        break
+            
+            candles = all_candles
             
             if not candles:
                 logger.error(f"❌ Impossible de charger les données pour {coin}")
@@ -426,10 +450,13 @@ class ScalpingBacktest:
             'positions_opened': 0
         }
         
-        # Simuler le trading
-        logger.info(f"📊 Simulation de {len(candles)} chandeliers...")
+        # Commencer après suffisamment de bougies pour avoir des indicateurs stables
+        # Pour timeframe 5m, on a besoin de ~50 bougies (EMA50 nécessite 50)
+        start_index = max(50, int(len(candles) * 0.05))  # Au moins 5% des données pour warm-up
         
-        for i in range(50, len(candles)):  # Commencer après 50 bougies pour avoir des indicateurs
+        logger.info(f"📊 Simulation de {len(candles)} chandeliers (démarrage à l'index {start_index})...")
+        
+        for i in range(start_index, len(candles)):
             try:
                 # Mettre à jour les chandeliers
                 self.signal_generator.candles = candles[:i+1]
