@@ -4,12 +4,11 @@ Optimisé pour scalping haute fréquence
 """
 
 import sys
-import io
+import os
 
-# Configuration de l'encodage UTF-8 pour Windows
+# Configuration de l'encodage UTF-8 pour Windows (sans modifier sys.stdout directement)
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 from flask import Flask, jsonify, render_template_string
 from flask_cors import CORS
@@ -371,11 +370,16 @@ if __name__ == '__main__':
     logger.info(f"📊 Monitoring: {config.DEFAULT_COIN} ({config.DEFAULT_INTERVAL})")
     
     try:
+        # Désactiver le banner Flask pour éviter les problèmes d'encodage Windows
+        import os
+        os.environ['FLASK_ENV'] = 'production'
+        
         app.run(
             host=config.WEB_SERVER_HOST,
             port=config.WEB_SERVER_PORT,
             debug=False,
-            threaded=True
+            threaded=True,
+            use_reloader=False
         )
     except KeyboardInterrupt:
         logger.info("🛑 Arrêt du serveur...")
