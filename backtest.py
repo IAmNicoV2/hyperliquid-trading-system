@@ -53,11 +53,12 @@ class ScalpingBacktest:
         
         # État du backtest
         self.capital = self.initial_capital
+        self.equity = self.initial_capital
         self.equity_curve = []
-        self.trades = []
-        self.positions = {}
+        self.closed_trades = []
+        self.positions = {}  # {coin: position_dict}
         
-        # Position manager
+        # Position manager (pour vérifications uniquement)
         self.position_manager = PositionManager()
         self.position_manager.set_daily_start_balance(self.initial_capital)
         
@@ -66,7 +67,7 @@ class ScalpingBacktest:
         
         # Métriques
         self.max_drawdown = 0.0
-        self.peak_capital = self.initial_capital
+        self.max_equity = self.initial_capital
         
         logger.info(f"✅ Backtest initialisé: Capital=${self.initial_capital:,.2f}, Slippage={self.slippage*100:.3f}%")
     
@@ -110,57 +111,258 @@ class ScalpingBacktest:
             logger.error(f"Erreur chargement données: {e}", exc_info=True)
             return []
     
-    def simulate_trade(
-        self,
-        side: str,
-        entry_price: float,
-        size: float,
-        exit_price: float,
-        is_maker: bool = False
-    ) -> Dict:
+    def calculate_position_size(self, signal_quality: float, account_balance: float, atr: float, price: float) -> Dict:
         """
-        Simule un trade avec frais et slippage
+        Calcule la taille de position avec risque limité à 1%
         
         Returns:
-            Résultat du trade
+            {'size_usd': float, 'risk_usd': float, 'sl_distance_percent': float}
         """
-        # Appliquer slippage à l'entrée
-        if side == 'LONG':
-            entry_price_executed = entry_price * (1 + self.slippage)
-            exit_price_executed = exit_price * (1 - self.slippage)
-        else:  # SHORT
-            entry_price_executed = entry_price * (1 - self.slippage)
-            exit_price_executed = exit_price * (1 + self.slippage)
+        # LIMITE : 1% risque par trade
+        max_risk_usd = account_balance * 0.01
         
-        # Calculer PNL brut
-        if side == 'LONG':
-            pnl_brut = (exit_price_executed - entry_price_executed) * size
+        # Quality 70-100 → multiplier 0.5x-1x
+        quality_multiplier = max(0.5, min(1.0, (signal_quality - 70) / 30)) if signal_quality >= 70 else 0.3
+        position_risk = max_risk_usd * quality_multiplier
+        
+        # SL distance basé ATR (0.5%-1.2%)
+        if atr > 0 and price > 0:
+            atr_percent = atr / price
+            sl_distance_percent = max(0.005, min(0.012, atr_percent * 1.2))
         else:
-            pnl_brut = (entry_price_executed - exit_price_executed) * size
+            sl_distance_percent = 0.008  # 0.8% par défaut
         
-        # Appliquer les frais
-        commission = self.commission_maker if is_maker else self.commission_taker
-        fees_entry = entry_price_executed * size * commission
-        fees_exit = exit_price_executed * size * commission
-        total_fees = fees_entry + fees_exit
+        # Size = risk / SL%
+        position_size_usd = position_risk / sl_distance_percent
         
-        # PNL net
-        pnl_net = pnl_brut - total_fees
-        pnl_percent = (pnl_net / (entry_price_executed * size)) * 100
+        # PLAFOND : 5% capital max
+        position_size_usd = min(position_size_usd, account_balance * 0.05)
+        position_size_usd = max(10.0, position_size_usd)
         
         return {
-            'side': side,
-            'entry_price': entry_price,
-            'entry_price_executed': entry_price_executed,
-            'exit_price': exit_price,
-            'exit_price_executed': exit_price_executed,
-            'size': size,
-            'pnl_brut': pnl_brut,
-            'pnl_net': pnl_net,
-            'pnl_percent': pnl_percent,
-            'fees': total_fees,
-            'is_maker': is_maker
+            'size_usd': round(position_size_usd, 2),
+            'risk_usd': round(position_risk, 2),
+            'sl_distance_percent': round(sl_distance_percent * 100, 2)
         }
+    
+    def calculate_sl_tp_levels(self, entry_price: float, signal_type: str, atr: float) -> Dict:
+        """
+        Calcule SL/TP réalistes basés sur ATR avec ratio 1.5:1
+        """
+        if atr > 0 and entry_price > 0:
+            atr_percent = atr / entry_price
+        else:
+            atr_percent = 0.008  # 0.8% par défaut
+        
+        # SL : 0.6%-1% (scalping) - utiliser ATR si disponible
+        if atr_percent > 0:
+            sl_distance = max(0.006, min(0.01, atr_percent * 1.2))
+        else:
+            sl_distance = 0.008  # 0.8% par défaut
+        
+        if signal_type == 'ACHAT' or signal_type == 'BUY':
+            sl_price = entry_price * (1 - sl_distance)
+            # TP : ratio 1.5:1 minimum, mais ajuster selon ATR
+            tp_distance = max(sl_distance * 1.5, 0.012)  # Minimum 1.2%
+            tp_price = entry_price * (1 + tp_distance)
+        else:  # VENTE / SELL
+            sl_price = entry_price * (1 + sl_distance)
+            tp_distance = max(sl_distance * 1.5, 0.012)  # Minimum 1.2%
+            tp_price = entry_price * (1 - tp_distance)
+        
+        return {
+            'stop_loss': round(sl_price, 2),
+            'take_profit': round(tp_price, 2),
+            'sl_percent': round(sl_distance * 100, 2),
+            'tp_percent': round(tp_distance * 100, 2),
+            'risk_reward': round(tp_distance / sl_distance, 2)
+        }
+    
+    def execute_trade(self, timestamp: float, coin: str, signal: str, price: float, size_info: Dict, sl_tp: Dict) -> Optional[Dict]:
+        """
+        Ouvre une position avec fees et slippage
+        """
+        position_size_usd = size_info['size_usd']
+        
+        # Vérifier capital disponible (garder 5% marge)
+        if position_size_usd > self.capital * 0.95:
+            return None
+        
+        # FEES taker (0.035%)
+        entry_fee_percent = self.commission_taker
+        entry_fee = position_size_usd * entry_fee_percent
+        
+        # Slippage (0.02%)
+        slippage_percent = self.slippage
+        slippage = position_size_usd * slippage_percent
+        
+        # Prix ajusté
+        if signal == 'ACHAT' or signal == 'BUY':
+            actual_entry_price = price * (1 + slippage_percent)
+        else:
+            actual_entry_price = price * (1 - slippage_percent)
+        
+        position = {
+            'coin': coin,
+            'type': signal,
+            'entry_price': actual_entry_price,
+            'entry_time': timestamp,
+            'size_usd': position_size_usd,
+            'entry_fee': entry_fee,
+            'slippage': slippage,
+            'stop_loss': sl_tp['stop_loss'],
+            'take_profit': sl_tp['take_profit'],
+            'sl_percent': sl_tp['sl_percent'],
+            'tp_percent': sl_tp['tp_percent'],
+            'initial_stop_loss': sl_tp['stop_loss']  # Garder SL initial pour trailing
+        }
+        
+        # Déduire capital
+        self.capital -= (position_size_usd + entry_fee + slippage)
+        self.positions[coin] = position
+        
+        return position
+    
+    def check_exit_conditions(self, timestamp: float, coin: str, current_price: float) -> Optional[Dict]:
+        """
+        Vérifie les conditions de sortie avec trailing stop et break-even
+        """
+        if coin not in self.positions:
+            return None
+        
+        position = self.positions[coin]
+        entry_price = position['entry_price']
+        position_type = position['type']
+        
+        if position_type == 'ACHAT' or position_type == 'BUY':
+            pnl_percent = (current_price - entry_price) / entry_price
+            
+            # Stop Loss
+            if current_price <= position['stop_loss']:
+                return self.close_position(timestamp, coin, current_price, 'STOP_LOSS')
+            
+            # Take Profit
+            if current_price >= position['take_profit']:
+                return self.close_position(timestamp, coin, current_price, 'TAKE_PROFIT')
+            
+            # Trailing stop : trail dès +0.8%
+            if pnl_percent > 0.008:
+                new_sl = entry_price * (1 + pnl_percent * 0.5)
+                position['stop_loss'] = max(position['stop_loss'], new_sl)
+            
+            # Break-even : SL à entry+fees dès +0.5%
+            if pnl_percent > 0.005:
+                breakeven_price = entry_price * 1.001
+                position['stop_loss'] = max(position['stop_loss'], breakeven_price)
+        
+        else:  # VENTE / SELL
+            pnl_percent = (entry_price - current_price) / entry_price
+            
+            if current_price >= position['stop_loss']:
+                return self.close_position(timestamp, coin, current_price, 'STOP_LOSS')
+            
+            if current_price <= position['take_profit']:
+                return self.close_position(timestamp, coin, current_price, 'TAKE_PROFIT')
+            
+            if pnl_percent > 0.008:
+                new_sl = entry_price * (1 - pnl_percent * 0.5)
+                position['stop_loss'] = min(position['stop_loss'], new_sl)
+            
+            if pnl_percent > 0.005:
+                breakeven_price = entry_price * 0.999
+                position['stop_loss'] = min(position['stop_loss'], breakeven_price)
+        
+        # Time stop : fermer après 15 min si profit <0.2%
+        # Gérer les timestamps (int ou datetime)
+        try:
+            if isinstance(position['entry_time'], (int, float)) and isinstance(timestamp, (int, float)):
+                time_elapsed = (timestamp - position['entry_time']) / 60  # minutes
+            else:
+                # Convertir en datetime si nécessaire
+                from datetime import datetime
+                if isinstance(position['entry_time'], (int, float)):
+                    entry_dt = datetime.fromtimestamp(position['entry_time'])
+                else:
+                    entry_dt = position['entry_time']
+                if isinstance(timestamp, (int, float)):
+                    exit_dt = datetime.fromtimestamp(timestamp)
+                else:
+                    exit_dt = timestamp
+                time_elapsed = (exit_dt - entry_dt).total_seconds() / 60
+        except:
+            time_elapsed = 0
+        
+        if time_elapsed > 15 and pnl_percent < 0.002:
+            return self.close_position(timestamp, coin, current_price, 'TIME_STOP')
+        
+        return None
+    
+    def close_position(self, timestamp: float, coin: str, exit_price: float, reason: str) -> Dict:
+        """
+        Ferme une position et calcule P&L net
+        """
+        position = self.positions[coin]
+        
+        # Exit fees + slippage
+        exit_fee_percent = self.commission_taker
+        exit_slippage_percent = self.slippage
+        
+        size_usd = position['size_usd']
+        entry_price = position['entry_price']
+        
+        # Prix sortie ajusté
+        if position['type'] == 'ACHAT' or position['type'] == 'BUY':
+            actual_exit_price = exit_price * (1 - exit_slippage_percent)
+        else:
+            actual_exit_price = exit_price * (1 + exit_slippage_percent)
+        
+        # P&L brut
+        if position['type'] == 'ACHAT' or position['type'] == 'BUY':
+            pnl_gross = size_usd * ((actual_exit_price - entry_price) / entry_price)
+        else:
+            pnl_gross = size_usd * ((entry_price - actual_exit_price) / entry_price)
+        
+        # Fees totaux
+        exit_fee = size_usd * exit_fee_percent
+        total_fees = position['entry_fee'] + exit_fee
+        total_slippage = position['slippage'] + (size_usd * exit_slippage_percent)
+        
+        # P&L NET
+        pnl_net = pnl_gross - total_fees - total_slippage
+        
+        # Retour capital + P&L
+        self.capital += (size_usd + pnl_net)
+        self.equity = self.capital + sum(p['size_usd'] for p in self.positions.values() if p != position)
+        
+        # Trade record
+        trade = {
+            'entry_time': position['entry_time'],
+            'exit_time': timestamp,
+            'coin': coin,
+            'type': position['type'],
+            'entry_price': entry_price,
+            'exit_price': actual_exit_price,
+            'size_usd': size_usd,
+            'pnl_gross': round(pnl_gross, 2),
+            'pnl_net': round(pnl_net, 2),
+            'pnl_percent': round((pnl_net / size_usd) * 100, 2),
+            'fees': round(total_fees, 2),
+            'slippage': round(total_slippage, 2),
+            'exit_reason': reason,
+            'duration_min': round((timestamp - position['entry_time']) / 60, 1)
+        }
+        
+        self.closed_trades.append(trade)
+        
+        # Update drawdown
+        if self.equity > self.max_equity:
+            self.max_equity = self.equity
+        
+        current_drawdown = (self.max_equity - self.equity) / self.max_equity if self.max_equity > 0 else 0
+        self.max_drawdown = max(self.max_drawdown, current_drawdown)
+        
+        del self.positions[coin]
+        return trade
     
     def run(
         self,
@@ -207,8 +409,12 @@ class ScalpingBacktest:
         self.signal_generator = HyperliquidSignalGenerator(coin=coin, interval="1m")
         self.signal_generator.candles = candles
         
-        # Pour le backtest, utiliser un seuil plus bas pour générer des trades
-        signal_threshold = signal_quality_threshold or 40  # 40 pour backtest (plus permissif)
+        # Pour le backtest, utiliser un seuil modéré (65 pour générer des trades)
+        try:
+            import config
+            signal_threshold = signal_quality_threshold or 65  # 65 pour backtest (plus permissif que 75)
+        except:
+            signal_threshold = signal_quality_threshold or 65
         
         # Statistiques pour debug
         stats = {
@@ -253,11 +459,15 @@ class ScalpingBacktest:
                 should_enter, reason = self._should_enter_trade(analysis)
                 if not should_enter:
                     stats['filters_failed'] += 1
-                    # Pour backtest, on peut ignorer certains filtres stricts
-                    # Si qualité >60, on peut passer malgré certains filtres
-                    if signal_quality < 60:
-                        if i % 200 == 0:
-                            logger.debug(f"Filtre d'entrée non passé: {reason}")
+                    # Pour backtest, assouplir certains filtres si qualité >70
+                    if signal_quality >= 70:
+                        # Ignorer filtres volume/spread si qualité élevée
+                        if 'volume' not in reason.lower() and 'spread' not in reason.lower():
+                            # Passer malgré autres filtres si qualité >70
+                            pass
+                        else:
+                            continue
+                    else:
                         continue
                 
                 logger.info(f"✅ Signal {signal} détecté à l'index {i} | Qualité: {signal_quality:.1f}/100")
@@ -272,126 +482,57 @@ class ScalpingBacktest:
                     # Sinon, on continue même si limite atteinte (pour backtest)
                     pass
                 
-                # Calculer la taille de position
+                # Calculer SL/TP réalistes
                 entry_price = candles[i]['close']
-                sl_tp = analysis.get('sl_tp', {})
-                stop_loss = sl_tp.get('stop_loss', 0)
+                atr = analysis.get('indicators', {}).get('atr', 0)
                 
-                if stop_loss == 0:
+                sl_tp = self.calculate_sl_tp_levels(entry_price, signal, atr)
+                
+                # Calculer la taille de position
+                size_info = self.calculate_position_size(signal_quality, self.equity, atr, entry_price)
+                
+                # Vérifier capital disponible
+                if size_info['size_usd'] > self.equity * 0.95:
                     continue
                 
-                atr = analysis.get('indicators', {}).get('atr', 0)
-                position_size = self.position_manager.calculate_position_size(
-                    signal_quality, self.capital, atr, entry_price, stop_loss
-                )
-                
                 # Ouvrir la position
-                side = 'LONG' if signal == 'ACHAT' else 'SHORT'
-                # Utiliser les TP calculés par calculate_sl_tp
-                take_profit_1 = sl_tp.get('take_profit_1', entry_price * 1.01)
-                take_profit_2 = sl_tp.get('take_profit_2', entry_price * 1.018)
-                take_profit_3 = sl_tp.get('take_profit_3', entry_price * 1.025)
+                timestamp = candles[i]['time']
+                position = self.execute_trade(timestamp, coin, signal, entry_price, size_info, sl_tp)
                 
-                position = self.position_manager.open_position(
-                    coin=coin,
-                    side=side,
-                    entry_price=entry_price,
-                    size=position_size,
-                    stop_loss=stop_loss,
-                    take_profit_1=take_profit_1,
-                    take_profit_2=take_profit_2,
-                    take_profit_3=take_profit_3,
-                    signal_quality=signal_quality
-                )
-                
-                # Simuler la fermeture de la position
-                exit_reason = None
-                exit_price = None
+                if not position:
+                    continue
                 
                 # Chercher la sortie dans les bougies suivantes
-                max_lookahead = min(100, len(candles) - i - 1)  # Max 100 bougies ou jusqu'à la fin
+                max_lookahead = min(100, len(candles) - i - 1)  # Max 100 bougies (100 minutes)
+                trade_closed = None
+                
                 for j in range(i + 1, i + 1 + max_lookahead):
                     current_candle = candles[j]
                     current_price = current_candle['close']
+                    current_timestamp = current_candle['time']
                     
-                    # Vérifier Stop Loss d'abord (priorité)
-                    if self.position_manager.check_stop_loss(coin, current_price):
-                        exit_price = position['stop_loss']
-                        exit_reason = 'STOP_LOSS'
-                        break
-                    
-                    # Vérifier Take Profits directement
-                    if side == 'LONG':
-                        if current_price >= position['take_profit_1']:
-                            exit_price = position['take_profit_1']
-                            exit_reason = 'TAKE_PROFIT_1'
-                            break
-                        elif current_price >= position['take_profit_2']:
-                            exit_price = position['take_profit_2']
-                            exit_reason = 'TAKE_PROFIT_2'
-                            break
-                        elif current_price >= position['take_profit_3']:
-                            exit_price = position['take_profit_3']
-                            exit_reason = 'TAKE_PROFIT_3'
-                            break
-                    else:  # SHORT
-                        if current_price <= position['take_profit_1']:
-                            exit_price = position['take_profit_1']
-                            exit_reason = 'TAKE_PROFIT_1'
-                            break
-                        elif current_price <= position['take_profit_2']:
-                            exit_price = position['take_profit_2']
-                            exit_reason = 'TAKE_PROFIT_2'
-                            break
-                        elif current_price <= position['take_profit_3']:
-                            exit_price = position['take_profit_3']
-                            exit_reason = 'TAKE_PROFIT_3'
-                            break
-                    
-                    # Vérifier Stop Loss temporel
-                    if self.position_manager.check_time_stop(coin):
-                        exit_price = current_price
-                        exit_reason = 'TIME_STOP'
+                    # Vérifier conditions de sortie
+                    trade_closed = self.check_exit_conditions(current_timestamp, coin, current_price)
+                    if trade_closed:
                         break
                 
                 # Si pas de sortie trouvée, fermer à la fin du lookahead
-                if exit_price is None:
+                if not trade_closed:
                     if i + max_lookahead < len(candles):
                         exit_price = candles[i + max_lookahead]['close']
+                        exit_timestamp = candles[i + max_lookahead]['time']
                     else:
                         exit_price = candles[-1]['close']
-                    exit_reason = 'TIMEOUT'
+                        exit_timestamp = candles[-1]['time']
+                    trade_closed = self.close_position(exit_timestamp, coin, exit_price, 'TIMEOUT')
                 
-                # Simuler le trade
-                trade_result = self.simulate_trade(
-                    side=side,
-                    entry_price=entry_price,
-                    size=position_size,
-                    exit_price=exit_price,
-                    is_maker=getattr(config, 'PREFER_MAKER_ORDERS', True) if config else True
-                )
-                
-                # Fermer la position
-                trade_record = self.position_manager.close_position(coin, exit_price, exit_reason)
-                if trade_record:
-                    trade_record.update(trade_result)
-                    self.trades.append(trade_record)
-                    
-                    # Mettre à jour le capital
-                    self.capital += trade_record['pnl_net']
+                if trade_closed:
+                    # Mettre à jour equity curve
                     self.equity_curve.append({
-                        'time': candles[i]['time'],
-                        'capital': self.capital,
-                        'pnl': trade_record['pnl_net']
+                        'time': trade_closed['exit_time'],
+                        'equity': self.equity,
+                        'pnl': trade_closed['pnl_net']
                     })
-                    
-                    # Mettre à jour le drawdown
-                    if self.capital > self.peak_capital:
-                        self.peak_capital = self.capital
-                    else:
-                        drawdown = (self.peak_capital - self.capital) / self.peak_capital
-                        if drawdown > self.max_drawdown:
-                            self.max_drawdown = drawdown
                 
             except Exception as e:
                 logger.error(f"Erreur lors du backtest à l'index {i}: {e}", exc_info=True)
@@ -408,6 +549,10 @@ class ScalpingBacktest:
         # Calculer les métriques finales
         metrics = self._calculate_metrics()
         metrics['debug_stats'] = stats
+        
+        # Afficher métriques détaillées
+        self.print_detailed_metrics()
+        
         return metrics
     
     def _calculate_signal_quality(self, analysis: Dict) -> float:
@@ -530,31 +675,33 @@ class ScalpingBacktest:
     
     def _calculate_metrics(self) -> Dict:
         """Calcule les métriques finales du backtest"""
-        if not self.trades:
+        if not self.closed_trades:
             return {
                 'error': 'Aucun trade exécuté',
                 'total_trades': 0
             }
         
-        trades = self.trades
+        trades = self.closed_trades
         total_trades = len(trades)
         
         winning_trades = [t for t in trades if t['pnl_net'] > 0]
-        losing_trades = [t for t in trades if t['pnl_net'] < 0]
+        losing_trades = [t for t in trades if t['pnl_net'] <= 0]
         
-        winrate = len(winning_trades) / total_trades if total_trades > 0 else 0
+        wins = len(winning_trades)
+        losses = len(losing_trades)
+        winrate = (wins / total_trades * 100) if total_trades > 0 else 0
         
-        total_wins = sum(t['pnl_net'] for t in winning_trades)
-        total_losses = abs(sum(t['pnl_net'] for t in losing_trades))
-        
-        profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
-        
-        avg_win = total_wins / len(winning_trades) if winning_trades else 0
-        avg_loss = total_losses / len(losing_trades) if losing_trades else 0
+        avg_win = sum(t['pnl_net'] for t in winning_trades) / wins if wins > 0 else 0
+        avg_loss = sum(t['pnl_net'] for t in losing_trades) / losses if losses > 0 else 0
         
         total_pnl = sum(t['pnl_net'] for t in trades)
-        final_capital = self.initial_capital + total_pnl
-        roi = (total_pnl / self.initial_capital) * 100
+        total_fees = sum(t['fees'] for t in trades)
+        
+        gross_profit = sum(t['pnl_net'] for t in winning_trades)
+        gross_loss = abs(sum(t['pnl_net'] for t in losing_trades))
+        
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+        final_return = ((self.equity - self.initial_capital) / self.initial_capital) * 100
         
         # Sharpe Ratio (simplifié)
         returns = [t['pnl_percent'] for t in trades]
@@ -565,26 +712,77 @@ class ScalpingBacktest:
         else:
             sharpe_ratio = 0
         
-        # Max drawdown
-        max_dd = self.max_drawdown * 100
-        
         return {
             'total_trades': total_trades,
-            'winning_trades': len(winning_trades),
-            'losing_trades': len(losing_trades),
-            'winrate': winrate * 100,
+            'winning_trades': wins,
+            'losing_trades': losses,
+            'winrate': winrate,
             'profit_factor': profit_factor,
             'total_pnl': total_pnl,
-            'roi': roi,
+            'roi': final_return,
             'initial_capital': self.initial_capital,
-            'final_capital': final_capital,
+            'final_capital': self.equity,
             'avg_win': avg_win,
             'avg_loss': avg_loss,
-            'max_drawdown': max_dd,
+            'max_drawdown': self.max_drawdown * 100,
             'sharpe_ratio': sharpe_ratio,
+            'total_fees': total_fees,
+            'gross_profit': gross_profit,
+            'gross_loss': gross_loss,
             'trades': trades[-50:],  # 50 derniers trades
             'equity_curve': self.equity_curve
         }
+    
+    def print_detailed_metrics(self):
+        """Affiche les métriques détaillées du backtest"""
+        if not self.closed_trades:
+            print("❌ Aucun trade")
+            return
+        
+        winning_trades = [t for t in self.closed_trades if t['pnl_net'] > 0]
+        losing_trades = [t for t in self.closed_trades if t['pnl_net'] <= 0]
+        
+        total_trades = len(self.closed_trades)
+        wins = len(winning_trades)
+        losses = len(losing_trades)
+        
+        winrate = (wins / total_trades * 100) if total_trades > 0 else 0
+        
+        avg_win = sum(t['pnl_net'] for t in winning_trades) / wins if wins > 0 else 0
+        avg_loss = sum(t['pnl_net'] for t in losing_trades) / losses if losses > 0 else 0
+        
+        total_pnl = sum(t['pnl_net'] for t in self.closed_trades)
+        total_fees = sum(t['fees'] for t in self.closed_trades)
+        
+        gross_profit = sum(t['pnl_net'] for t in winning_trades)
+        gross_loss = abs(sum(t['pnl_net'] for t in losing_trades))
+        
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+        final_return = ((self.equity - self.initial_capital) / self.initial_capital) * 100
+        
+        print("\n" + "="*60)
+        print("📊 RÉSULTATS BACKTEST")
+        print("="*60)
+        print(f"Capital initial : ${self.initial_capital:,.2f}")
+        print(f"Capital final   : ${self.equity:,.2f}")
+        print(f"P&L Net         : ${total_pnl:,.2f} ({final_return:+.2f}%)")
+        print(f"Frais totaux    : ${total_fees:,.2f}")
+        print("-"*60)
+        print(f"Total trades    : {total_trades}")
+        print(f"Gagnants        : {wins} ({winrate:.2f}%)")
+        print(f"Perdants        : {losses}")
+        print(f"Profit Factor   : {profit_factor:.2f}")
+        print("-"*60)
+        print(f"Gain moyen      : ${avg_win:,.2f}")
+        print(f"Perte moyenne   : ${avg_loss:,.2f}")
+        print(f"Max Drawdown    : {self.max_drawdown*100:.2f}%")
+        print("="*60)
+        
+        print("\n✅ VALIDATION:")
+        print(f"  Winrate >45%     : {'✅' if winrate > 45 else '❌'} ({winrate:.1f}%)")
+        print(f"  Profit Factor>1.2: {'✅' if profit_factor > 1.2 else '❌'} ({profit_factor:.2f})")
+        print(f"  Drawdown <15%    : {'✅' if self.max_drawdown < 0.15 else '❌'} ({self.max_drawdown*100:.1f}%)")
+        print(f"  Return >0%       : {'✅' if final_return > 0 else '❌'} ({final_return:+.1f}%)")
     
     def generate_report(self, output_file: str = "backtest_report.html") -> str:
         """Génère un rapport HTML avec equity curve et métriques"""

@@ -9,12 +9,12 @@ API_TIMEOUT = 10  # secondes
 MAX_RETRIES = 3
 
 # ============================================================================
-# CONFIGURATION SCALPING HAUTE FRÉQUENCE
+# CONFIGURATION SCALPING CONSERVATEUR
 # ============================================================================
 
 # Configuration par défaut
 DEFAULT_COIN = "BTC"
-DEFAULT_INTERVAL = "1m"  # SCALPING: 1 minute au lieu de 5m
+DEFAULT_INTERVAL = "1m"  # SCALPING: 1 minute
 DEFAULT_CANDLE_LIMIT = 200
 
 # Multi-timeframe pour scalping
@@ -24,41 +24,42 @@ MULTI_TIMEFRAME = ["1m", "5m", "15m"]  # 1m signal, 5m trend, 15m contexte
 SUPPORTED_INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
 
 # ============================================================================
-# INDICATEURS RAPIDES POUR SCALPING
+# INDICATEURS CONSERVATEURS
 # ============================================================================
-RSI_PERIOD = 7  # SCALPING: 7 au lieu de 14 (plus réactif)
-MACD_FAST = 8   # SCALPING: Plus rapide
-MACD_SLOW = 21  # SCALPING: Plus rapide
-MACD_SIGNAL = 5  # SCALPING: Plus rapide
-EMA_SHORT = 9   # SCALPING: 9 au lieu de 20
-EMA_LONG = 21   # SCALPING: 21 au lieu de 50
+RSI_PERIOD = 9  # Plus conservateur que 7
+MACD_FAST = 8
+MACD_SLOW = 21
+MACD_SIGNAL = 5
+EMA_SHORT = 12  # Plus conservateur que 9
+EMA_LONG = 26   # Plus conservateur que 21
 BOLLINGER_PERIOD = 20
 BOLLINGER_STD_DEV = 2
-ATR_PERIOD = 10  # SCALPING: 10 au lieu de 14 (plus réactif)
-STOCHASTIC_PERIOD = 7  # SCALPING: Plus rapide
-WILLIAMS_R_PERIOD = 7  # SCALPING: Plus rapide
-CCI_PERIOD = 10  # SCALPING: Plus rapide
+ATR_PERIOD = 10
+STOCHASTIC_PERIOD = 7
+WILLIAMS_R_PERIOD = 7
+CCI_PERIOD = 10
 
 # ============================================================================
-# STOP LOSS / TAKE PROFIT SCALPING AGRESSIF
+# STOP LOSS / TAKE PROFIT CONSERVATEUR
 # ============================================================================
-MAX_STOP_LOSS_PERCENT = 0.8  # SCALPING: 0.3% à 0.8% (au lieu de 3%)
-MIN_STOP_LOSS_PERCENT = 0.3  # Minimum SL pour scalping
-MAX_TAKE_PROFIT_PERCENT = 2.5  # SCALPING: Max 2.5% (au lieu de 10%)
-MIN_RISK_REWARD_RATIO = 1.2  # SCALPING: Ratio minimum 1.2 (au lieu de 1.5)
+MAX_STOP_LOSS_PERCENT = 1.0  # Maximum 1% (au lieu de 0.8%)
+MIN_STOP_LOSS_PERCENT = 0.6  # Minimum 0.6% (au lieu de 0.3%)
+MAX_TAKE_PROFIT_PERCENT = 2.5
+MIN_RISK_REWARD_RATIO = 1.5  # Ratio minimum 1.5:1
 
 # Take Profit multi-niveaux (scalping)
-TP1_PERCENT = 1.0   # 50% de la position à +1.0%
-TP2_PERCENT = 1.8   # 30% de la position à +1.8%
-TP3_PERCENT = 2.5   # 20% de la position à +2.5% ou résistance
+TP1_PERCENT = 1.5   # Ratio 1.5:1 avec SL
+TP2_PERCENT = 2.0
+TP3_PERCENT = 2.5
 
 # Trailing Stop
-TRAILING_ACTIVATION = 0.5  # Activer trailing dès +0.5% profit
-TRAILING_PERCENT = 50      # Trail à 50% du gain
-BREAK_EVEN_ACTIVATION = 0.8  # Déplacer SL à break-even dès +0.8%
+TRAILING_ACTIVATION = 0.8  # Activer trailing dès +0.8% profit (plus conservateur)
+TRAILING_PERCENT = 50
+BREAK_EVEN_ACTIVATION = 0.5  # Break-even dès +0.5%
+BREAKEVEN_THRESHOLD = 0.5
 
 # Stop Loss temporel
-SL_TIME_MINUTES = 10  # Fermer position si aucun profit après 10 minutes
+SL_TIME_MINUTES = 15  # Fermer position si aucun profit après 15 minutes
 
 # Configuration des frais Hyperliquid (mis à jour 2024-2025)
 # Basé sur le volume de trading sur 14 jours
@@ -165,24 +166,25 @@ WALL_DETECTION_MULTIPLIER = 1.5  # Mur = 1.5x la moyenne
 WALL_DISTANCE_THRESHOLD = 0.01  # 1% du prix pour être considéré comme "proche"
 
 # ============================================================================
-# FILTRES D'ENTRÉE SCALPING
+# FILTRES D'ENTRÉE STRICTS
 # ============================================================================
-MIN_VOLUME_MULTIPLIER = 1.5  # Volume >150% moyenne 20 périodes
-MAX_SPREAD_PERCENT = 0.05  # Spread max 0.05% (éviter trades si spread trop élevé)
-MIN_DISTANCE_SR_PERCENT = 0.3  # Distance minimum du dernier S/R: 0.3%
-SIGNAL_QUALITY_THRESHOLD = 70  # Score qualité minimum pour entrer (0-100)
+MIN_VOLUME_MULTIPLIER = 2.0  # Volume >200% moyenne 20 périodes (plus strict)
+MAX_SPREAD_PERCENT = 0.04  # Spread max 0.04% (plus strict)
+MIN_DISTANCE_SR_PERCENT = 0.3
+SIGNAL_QUALITY_THRESHOLD = 75  # Score qualité minimum 75/100 (plus strict)
 
 # ATR Range acceptable pour scalping
 ATR_MIN_PERCENT = 0.4  # ATR minimum 0.4% du prix
 ATR_MAX_PERCENT = 1.2  # ATR maximum 1.2% du prix
 
 # ============================================================================
-# MONEY MANAGEMENT SCALPING
+# MONEY MANAGEMENT CONSERVATEUR
 # ============================================================================
-MAX_POSITIONS = 3  # Maximum 3 positions simultanées
-RISK_PER_TRADE = 0.015  # 1.5% du capital par trade (Kelly Criterion adapté)
-MAX_DAILY_DRAWDOWN = 0.05  # Arrêter trading si drawdown journalier >5%
-MAX_POSITION_HEAT = 0.08  # Heat max: 8% du capital (nb positions * risk)
+MAX_POSITIONS = 2  # Maximum 2 positions simultanées (plus conservateur)
+RISK_PER_TRADE = 0.01  # 1% du capital par trade (plus conservateur)
+MAX_DAILY_DRAWDOWN = 0.03  # Arrêter trading si drawdown journalier >3%
+MAX_POSITION_HEAT = 0.05  # Heat max: 5% du capital
+MAX_POSITION_SIZE_PERCENT = 0.05  # Maximum 5% du capital par position
 
 # Ajustement dynamique de la taille
 WINRATE_THRESHOLD_INCREASE = 0.60  # Augmenter taille si winrate >60% sur 20 trades

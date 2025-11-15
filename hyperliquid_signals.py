@@ -1561,7 +1561,7 @@ class HyperliquidSignalGenerator:
     
     def should_enter_trade(self, analysis: Dict) -> Tuple[bool, str]:
         """
-        Vérifie si on doit entrer dans le trade selon les filtres scalping
+        Vérifie si on doit entrer dans le trade selon les filtres stricts
         
         Returns:
             (should_enter: bool, reason: str)
@@ -1571,36 +1571,36 @@ class HyperliquidSignalGenerator:
         except:
             return False, "Config non disponible"
         
-        # 1. Volume >150% moyenne 20 périodes
+        signal_quality = self._calculate_signal_quality(analysis)
+        current_price = analysis.get('current_price', 0)
         candles = analysis.get('candles', [])
+        atr = analysis.get('indicators', {}).get('atr', 0)
+        spread = analysis.get('spread', 0.1)
+        
+        # Calculer volume ratio
+        volume_ratio = 0
         if len(candles) >= 20:
             recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
             avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
             if avg_volume > 0:
                 volume_ratio = recent_volume / (avg_volume * 5)
-                min_volume = getattr(config, 'MIN_VOLUME_MULTIPLIER', 1.5)
-                if volume_ratio < min_volume:
-                    return False, f"Volume insuffisant: {volume_ratio:.2f}x (min: {min_volume}x)"
         
-        # 2. ATR dans range acceptable (0.4% à 1.2%)
-        atr = analysis.get('indicators', {}).get('atr', 0)
-        current_price = analysis.get('current_price', 0)
+        # Vérifier tous les filtres
+        checks = {
+            'quality': signal_quality >= getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 75),
+            'volume': volume_ratio >= getattr(config, 'MIN_VOLUME_MULTIPLIER', 2.0) if len(candles) >= 20 else True,
+            'spread': spread <= getattr(config, 'MAX_SPREAD_PERCENT', 0.04),
+            'atr_range': True
+        }
+        
+        # ATR range
         if current_price > 0 and atr > 0:
             atr_percent = (atr / current_price) * 100
             atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.4)
             atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2)
-            if atr_percent < atr_min:
-                return False, f"ATR trop faible: {atr_percent:.2f}% (min: {atr_min}%)"
-            if atr_percent > atr_max:
-                return False, f"ATR trop élevé: {atr_percent:.2f}% (max: {atr_max}%)"
+            checks['atr_range'] = atr_min <= atr_percent <= atr_max
         
-        # 3. Spread <0.05%
-        spread = analysis.get('spread', 0.1)
-        max_spread = getattr(config, 'MAX_SPREAD_PERCENT', 0.05)
-        if spread > max_spread:
-            return False, f"Spread trop élevé: {spread:.3f}% (max: {max_spread}%)"
-        
-        # 4. Distance du dernier S/R >0.3%
+        # Distance S/R
         key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
         supports = key_levels.get('supports', [])
         resistances = key_levels.get('resistances', [])
@@ -1615,16 +1615,26 @@ class HyperliquidSignalGenerator:
                 distance = abs(current_price - resistance) / current_price * 100
                 min_distance = min(min_distance, distance)
         
+        checks['sr_distance'] = True
         if min_distance < float('inf'):
             min_distance_sr = getattr(config, 'MIN_DISTANCE_SR_PERCENT', 0.3)
-            if min_distance < min_distance_sr:
-                return False, f"Trop proche d'un S/R: {min_distance:.2f}% (min: {min_distance_sr}%)"
+            checks['sr_distance'] = min_distance >= min_distance_sr
         
-        # 5. Score qualité signal >70
-        signal_quality = self._calculate_signal_quality(analysis)
-        quality_threshold = getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 70)
-        if signal_quality < quality_threshold:
-            return False, f"Score qualité insuffisant: {signal_quality:.1f}/100 (min: {quality_threshold})"
+        # Vérifier position manager
+        checks['no_position'] = True
+        checks['capital_ok'] = True
+        try:
+            if hasattr(self, 'position_manager') and self.position_manager:
+                can_open, reason = self.position_manager.can_open_position(self.coin, 10000)  # Balance estimée
+                checks['no_position'] = can_open
+                checks['capital_ok'] = can_open
+        except:
+            pass
+        
+        # Identifier les filtres échoués
+        failed_checks = [k for k, v in checks.items() if not v]
+        if failed_checks:
+            return False, f"Filtres échoués: {', '.join(failed_checks)}"
         
         return True, "OK"
     
