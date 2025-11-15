@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environnement virtuel
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Fichiers sensibles - NE JAMAIS COMMITER
+.env
+*.log
+trading_agent.log
+*.key
+*.pem
+config_local.py
+
+# Fichiers de backup
+backup/
+*.bak
+*.backup
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Fichiers temporaires
+*.tmp
+*.temp
+.cache/
+
+# Données de trading
+trades_*.json
+positions_*.json
+*.db
+*.sqlite
+
