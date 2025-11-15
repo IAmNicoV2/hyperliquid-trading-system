@@ -178,20 +178,30 @@ class ScalpingBacktest:
         else:
             atr_percent = 0.008  # 0.8% par défaut
         
-        # SL : 0.6%-1% (scalping) - utiliser ATR si disponible
+        # SL : 0.5%-0.8% (optimisé) - utiliser ATR si disponible
+        try:
+            import config
+            max_sl = getattr(config, 'MAX_STOP_LOSS_PERCENT', 0.8) / 100
+            min_sl = getattr(config, 'MIN_STOP_LOSS_PERCENT', 0.5) / 100
+            min_rr = getattr(config, 'MIN_RISK_REWARD_RATIO', 2.0)
+        except:
+            max_sl = 0.008
+            min_sl = 0.005
+            min_rr = 2.0
+        
         if atr_percent > 0:
-            sl_distance = max(0.006, min(0.01, atr_percent * 1.2))
+            sl_distance = max(min_sl, min(max_sl, atr_percent * 1.0))
         else:
-            sl_distance = 0.008  # 0.8% par défaut
+            sl_distance = (min_sl + max_sl) / 2  # Moyenne
         
         if signal_type == 'ACHAT' or signal_type == 'BUY':
             sl_price = entry_price * (1 - sl_distance)
-            # TP : ratio 1.5:1 minimum, mais ajuster selon ATR
-            tp_distance = max(sl_distance * 1.5, 0.012)  # Minimum 1.2%
+            # TP : ratio 2:1 minimum (augmenté pour compenser winrate)
+            tp_distance = sl_distance * min_rr
             tp_price = entry_price * (1 + tp_distance)
         else:  # VENTE / SELL
             sl_price = entry_price * (1 + sl_distance)
-            tp_distance = max(sl_distance * 1.5, 0.012)  # Minimum 1.2%
+            tp_distance = sl_distance * min_rr
             tp_price = entry_price * (1 - tp_distance)
         
         return {
@@ -316,7 +326,14 @@ class ScalpingBacktest:
         except:
             time_elapsed = 0
         
-        if time_elapsed > 15 and pnl_percent < 0.002:
+        # Time stop : fermer après 10 min si profit <0.2% (réduit de 15 à 10 min)
+        try:
+            import config
+            sl_time_minutes = getattr(config, 'SL_TIME_MINUTES', 10)
+        except:
+            sl_time_minutes = 10
+        
+        if time_elapsed > sl_time_minutes and pnl_percent < 0.002:
             return self.close_position(timestamp, coin, current_price, 'TIME_STOP')
         
         return None

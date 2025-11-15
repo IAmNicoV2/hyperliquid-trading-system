@@ -42,15 +42,15 @@ CCI_PERIOD = 10
 # ============================================================================
 # STOP LOSS / TAKE PROFIT CONSERVATEUR
 # ============================================================================
-MAX_STOP_LOSS_PERCENT = 1.0  # Maximum 1% (au lieu de 0.8%)
-MIN_STOP_LOSS_PERCENT = 0.6  # Minimum 0.6% (au lieu de 0.3%)
+MAX_STOP_LOSS_PERCENT = 0.8  # Réduit à 0.8% pour améliorer ratio
+MIN_STOP_LOSS_PERCENT = 0.5  # Réduit à 0.5% min
 MAX_TAKE_PROFIT_PERCENT = 2.5
-MIN_RISK_REWARD_RATIO = 1.5  # Ratio minimum 1.5:1
+MIN_RISK_REWARD_RATIO = 2.0  # Augmenté à 2:1 pour compenser winrate
 
-# Take Profit multi-niveaux (scalping)
-TP1_PERCENT = 1.5   # Ratio 1.5:1 avec SL
-TP2_PERCENT = 2.0
-TP3_PERCENT = 2.5
+# Take Profit multi-niveaux (optimisé)
+TP1_PERCENT = 1.2   # 50% position à +1.2% (au lieu de 1.5%)
+TP2_PERCENT = 1.8   # 30% position à +1.8% (au lieu de 2.0%)
+TP3_PERCENT = 2.5   # 20% position à +2.5% ou résistance
 
 # Trailing Stop
 TRAILING_ACTIVATION = 0.8  # Activer trailing dès +0.8% profit (plus conservateur)
@@ -168,9 +168,9 @@ WALL_DISTANCE_THRESHOLD = 0.01  # 1% du prix pour être considéré comme "proch
 # ============================================================================
 # FILTRES D'ENTRÉE ULTRA-STRICTS
 # ============================================================================
-SIGNAL_QUALITY_THRESHOLD = 82  # Augmenter de 75 à 82
+SIGNAL_QUALITY_THRESHOLD = 78  # Légèrement assoupli de 82 à 78 (bon compromis)
 MIN_SIGNAL_CONFLUENCE = 4  # Minimum 4 indicateurs alignés
-MIN_VOLUME_MULTIPLIER = 2.5  # Volume >250% moyenne 20 périodes
+MIN_VOLUME_MULTIPLIER = 2.2  # Légèrement assoupli de 2.5 à 2.2 pour plus de trades
 MAX_SPREAD_PERCENT = 0.03  # Réduire de 0.04 à 0.03
 MIN_DISTANCE_SR_PERCENT = 0.3
 
