@@ -519,6 +519,22 @@ class ScalpingBacktest:
                 should_enter, reason = self._should_enter_trade(analysis)
                 if not should_enter:
                     stats['filters_failed'] += 1
+                    # OPTIMISATION: Compter les raisons d'échec pour diagnostic
+                    if 'filters_failed_reasons' not in stats:
+                        stats['filters_failed_reasons'] = {}
+                    # Extraire la raison principale
+                    if 'volume' in reason.lower():
+                        stats['filters_failed_reasons']['volume'] = stats['filters_failed_reasons'].get('volume', 0) + 1
+                    elif 'spread' in reason.lower():
+                        stats['filters_failed_reasons']['spread'] = stats['filters_failed_reasons'].get('spread', 0) + 1
+                    elif 'atr' in reason.lower():
+                        stats['filters_failed_reasons']['atr'] = stats['filters_failed_reasons'].get('atr', 0) + 1
+                    elif 'ema' in reason.lower():
+                        stats['filters_failed_reasons']['ema'] = stats['filters_failed_reasons'].get('ema', 0) + 1
+                    elif 'contexte' in reason.lower() or 'context' in reason.lower():
+                        stats['filters_failed_reasons']['context'] = stats['filters_failed_reasons'].get('context', 0) + 1
+                    else:
+                        stats['filters_failed_reasons']['other'] = stats['filters_failed_reasons'].get('other', 0) + 1
                     continue
                 
                 # OPTIMISATION: Log seulement les signaux de haute qualité
@@ -598,6 +614,13 @@ class ScalpingBacktest:
         logger.info(f"   Qualité insuffisante: {stats['quality_too_low']}")
         logger.info(f"   Filtres non passés: {stats['filters_failed']}")
         logger.info(f"   Positions ouvertes: {stats['positions_opened']}")
+        
+        # Afficher les raisons d'échec des filtres
+        if 'filters_failed_reasons' in stats and stats['filters_failed_reasons']:
+            print("\n🔍 RAISONS D'ÉCHEC DES FILTRES:")
+            for reason, count in sorted(stats['filters_failed_reasons'].items(), key=lambda x: -x[1]):
+                pct = (count / stats['filters_failed']) * 100 if stats['filters_failed'] > 0 else 0
+                print(f"   {reason}: {count} ({pct:.1f}%)")
         
         # Calculer les métriques finales
         metrics = self._calculate_metrics()

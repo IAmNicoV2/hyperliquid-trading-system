@@ -1588,8 +1588,14 @@ class HyperliquidSignalGenerator:
         passed = sum(checks.values())
         total = len(checks)
         
-        # Au moins 5/6 critères doivent passer
-        return passed >= 5, checks, f"{passed}/{total}"
+        # Au moins 5/6 critères doivent passer (ou 4/6 en mode permissif)
+        try:
+            import config
+            min_checks = getattr(config, 'VALIDATION_CONTEXT_MIN_CHECKS', 5)
+        except:
+            min_checks = 5
+        
+        return passed >= min_checks, checks, f"{passed}/{total}"
     
     def should_enter_trade(self, analysis: Dict) -> Tuple[bool, str]:
         """
@@ -1621,15 +1627,41 @@ class HyperliquidSignalGenerator:
         signal = analysis.get('signal', 'NEUTRE')
         signal_type = 'ACHAT' if signal == 'ACHAT' else 'VENTE'
         
-        # Étape 1 : Filtres basiques
+        # Étape 1 : Filtres basiques (peuvent être assouplis pour tests)
+        try:
+            import config
+            min_volume = getattr(config, 'MIN_VOLUME_MULTIPLIER', 2.5)
+            max_spread = getattr(config, 'MAX_SPREAD_PERCENT', 0.03)
+            atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.5) / 100  # Convertir en décimal
+            atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2) / 100
+        except:
+            min_volume = 2.5
+            max_spread = 0.03
+            atr_min = 0.005
+            atr_max = 0.012
+        
+        # Option pour désactiver certains filtres en mode test
+        try:
+            import config
+            skip_volume_filter = getattr(config, 'SKIP_VOLUME_FILTER', False)
+            skip_atr_filter = getattr(config, 'SKIP_ATR_FILTER', False)
+        except:
+            skip_volume_filter = False
+            skip_atr_filter = False
+        
+        # Construire les checks basiques
         basic_checks = {
             'quality': signal_quality >= getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 82),
-            'volume': volume_ratio >= getattr(config, 'MIN_VOLUME_MULTIPLIER', 2.5) if len(candles) >= 20 else False,
-            'spread': spread <= getattr(config, 'MAX_SPREAD_PERCENT', 0.03),
-            'atr_range': 0.005 <= atr_percent <= 0.012 if atr_percent > 0 else False,
+            'spread': spread <= max_spread,
             'no_position': True,
             'capital_ok': True
         }
+        
+        # Ajouter volume et ATR seulement si non désactivés
+        if not skip_volume_filter:
+            basic_checks['volume'] = volume_ratio >= min_volume if len(candles) >= 20 else False
+        if not skip_atr_filter:
+            basic_checks['atr_range'] = atr_min <= atr_percent <= atr_max if atr_percent > 0 else False
         
         # Vérifier position manager
         try:
@@ -1644,7 +1676,16 @@ class HyperliquidSignalGenerator:
             failed = [k for k, v in basic_checks.items() if not v]
             return False, f"Filtres basiques échoués: {', '.join(failed)}"
         
-        # Étape 2 : Validation contexte
+        # Étape 2 : Validation contexte (peut être désactivée pour tests)
+        try:
+            import config
+            skip_context = getattr(config, 'SKIP_CONTEXT_VALIDATION', False)
+        except:
+            skip_context = False
+        
+        if skip_context:
+            return True, "OK (validation contexte désactivée)"
+        
         indicators = analysis.get('indicators', {})
         rsi = indicators.get('rsi', 50)
         macd = indicators.get('macd', {'histogram': 0})
@@ -1653,9 +1694,18 @@ class HyperliquidSignalGenerator:
         stochastic = indicators.get('stochastic', {})
         williams_r = indicators.get('williams_r', -50)
         
-        # Vérifier que les indicateurs sont valides
-        if ema20 == 0 or ema50 == 0:
-            return False, "Indicateurs EMA non calculés"
+        # Vérifier que les indicateurs sont valides (assoupli pour backtest)
+        # En backtest, on peut avoir des EMA à 0 au début, on skip cette vérification
+        try:
+            import config
+            skip_ema_check = getattr(config, 'BACKTEST_FAST_MODE', False)
+            if skip_ema_check and (ema20 == 0 or ema50 == 0):
+                # En mode rapide, on accepte si au moins un EMA est calculé
+                if ema20 == 0 and ema50 == 0:
+                    return False, "Indicateurs EMA non calculés"
+        except:
+            if ema20 == 0 or ema50 == 0:
+                return False, "Indicateurs EMA non calculés"
         
         context_valid, context_checks, context_score = self.validate_signal_context(
             signal_type, rsi, ema20, ema50, current_price, macd, 

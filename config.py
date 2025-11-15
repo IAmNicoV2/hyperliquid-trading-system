@@ -203,6 +203,9 @@ COOLDOWN_AFTER_LOSS_MINUTES = 30  # Attendre 30 min après perte
 REQUIRE_TREND_ALIGNMENT = True  # Trader uniquement avec trend
 MIN_TREND_STRENGTH = 0.6  # EMA20/EMA50 ratio min
 
+# VALIDATION CONTEXTE
+VALIDATION_CONTEXT_MIN_CHECKS = 5  # Minimum 5/6 critères (réduire à 4 pour tests)
+
 # ============================================================================
 # ORDER BOOK PROFOND
 # ============================================================================
