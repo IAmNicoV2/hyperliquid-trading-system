@@ -634,6 +634,35 @@ class ScalpingBacktest:
         print(f"  <5 min: {len(short_losses)} ({len(short_losses)/len(losing_trades)*100:.1f}%)")
         print(f"  5-15 min: {len(medium_losses)} ({len(medium_losses)/len(losing_trades)*100:.1f}%)")
         print(f"  >15 min: {len(long_losses)} ({len(long_losses)/len(losing_trades)*100:.1f}%)")
+        
+        # Comparaison avec trades gagnants
+        winning_trades = [t for t in self.closed_trades if t['pnl_net'] > 0]
+        if winning_trades:
+            avg_duration_win = sum(t['duration_min'] for t in winning_trades) / len(winning_trades)
+            buy_wins = sum(1 for t in winning_trades if t['type'] in ['ACHAT', 'BUY'])
+            sell_wins = len(winning_trades) - buy_wins
+            avg_win = sum(t['pnl_net'] for t in winning_trades) / len(winning_trades)
+            
+            print(f"\n📊 COMPARAISON GAINS vs PERTES:")
+            print(f"  Durée moyenne gains : {avg_duration_win:.1f} min")
+            print(f"  BUY: {buy_wins} gains, {buy_losses} pertes")
+            print(f"  SELL: {sell_wins} gains, {sell_losses} pertes")
+            print(f"  Gain moyen : ${avg_win:.2f}")
+            ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+            print(f"  Ratio gain/perte : {ratio:.2f}")
+            
+            # Recommandations
+            print(f"\n💡 RECOMMANDATIONS:")
+            if len(short_losses) / len(losing_trades) > 0.5:
+                print("   ⚠️  Beaucoup de pertes rapides: vérifier SL trop serré ou entrées prématurées")
+            if avg_duration_loss < avg_duration_win * 0.5:
+                print("   ⚠️  Pertes trop rapides: considérer trailing stop plus agressif")
+            if buy_losses > sell_losses * 2:
+                print("   ⚠️  BUY sous-performe: vérifier filtres pour signaux haussiers")
+            if sell_losses > buy_losses * 2:
+                print("   ⚠️  SELL sous-performe: vérifier filtres pour signaux baissiers")
+            if ratio < 1.2:
+                print("   ⚠️  Ratio gain/perte trop faible: augmenter TP ou réduire SL")
     
     def _calculate_signal_quality(self, analysis: Dict) -> float:
         """
