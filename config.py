@@ -8,32 +8,57 @@ WS_BASE_URL = "wss://api.hyperliquid.xyz/ws"
 API_TIMEOUT = 10  # secondes
 MAX_RETRIES = 3
 
+# ============================================================================
+# CONFIGURATION SCALPING HAUTE FRÉQUENCE
+# ============================================================================
+
 # Configuration par défaut
 DEFAULT_COIN = "BTC"
-DEFAULT_INTERVAL = "5m"
+DEFAULT_INTERVAL = "1m"  # SCALPING: 1 minute au lieu de 5m
 DEFAULT_CANDLE_LIMIT = 200
+
+# Multi-timeframe pour scalping
+MULTI_TIMEFRAME = ["1m", "5m", "15m"]  # 1m signal, 5m trend, 15m contexte
 
 # Intervalles supportés
 SUPPORTED_INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
 
-# Configuration des indicateurs techniques
-RSI_PERIOD = 14
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-EMA_SHORT = 20
-EMA_LONG = 50
+# ============================================================================
+# INDICATEURS RAPIDES POUR SCALPING
+# ============================================================================
+RSI_PERIOD = 7  # SCALPING: 7 au lieu de 14 (plus réactif)
+MACD_FAST = 8   # SCALPING: Plus rapide
+MACD_SLOW = 21  # SCALPING: Plus rapide
+MACD_SIGNAL = 5  # SCALPING: Plus rapide
+EMA_SHORT = 9   # SCALPING: 9 au lieu de 20
+EMA_LONG = 21   # SCALPING: 21 au lieu de 50
 BOLLINGER_PERIOD = 20
 BOLLINGER_STD_DEV = 2
-ATR_PERIOD = 14
-STOCHASTIC_PERIOD = 14
-WILLIAMS_R_PERIOD = 14
-CCI_PERIOD = 20
+ATR_PERIOD = 10  # SCALPING: 10 au lieu de 14 (plus réactif)
+STOCHASTIC_PERIOD = 7  # SCALPING: Plus rapide
+WILLIAMS_R_PERIOD = 7  # SCALPING: Plus rapide
+CCI_PERIOD = 10  # SCALPING: Plus rapide
 
-# Configuration Stop Loss / Take Profit
-MAX_STOP_LOSS_PERCENT = 3.0  # Maximum 3% de perte
-MAX_TAKE_PROFIT_PERCENT = 10.0  # Maximum 10% de gain
-MIN_RISK_REWARD_RATIO = 1.5  # Ratio minimum Risk/Reward
+# ============================================================================
+# STOP LOSS / TAKE PROFIT SCALPING AGRESSIF
+# ============================================================================
+MAX_STOP_LOSS_PERCENT = 0.8  # SCALPING: 0.3% à 0.8% (au lieu de 3%)
+MIN_STOP_LOSS_PERCENT = 0.3  # Minimum SL pour scalping
+MAX_TAKE_PROFIT_PERCENT = 2.5  # SCALPING: Max 2.5% (au lieu de 10%)
+MIN_RISK_REWARD_RATIO = 1.2  # SCALPING: Ratio minimum 1.2 (au lieu de 1.5)
+
+# Take Profit multi-niveaux (scalping)
+TP1_PERCENT = 1.0   # 50% de la position à +1.0%
+TP2_PERCENT = 1.8   # 30% de la position à +1.8%
+TP3_PERCENT = 2.5   # 20% de la position à +2.5% ou résistance
+
+# Trailing Stop
+TRAILING_ACTIVATION = 0.5  # Activer trailing dès +0.5% profit
+TRAILING_PERCENT = 50      # Trail à 50% du gain
+BREAK_EVEN_ACTIVATION = 0.8  # Déplacer SL à break-even dès +0.8%
+
+# Stop Loss temporel
+SL_TIME_MINUTES = 10  # Fermer position si aucun profit après 10 minutes
 
 # Configuration des frais Hyperliquid (mis à jour 2024-2025)
 # Basé sur le volume de trading sur 14 jours
@@ -139,7 +164,55 @@ SQUEEZE_THRESHOLD = 0.5  # Multiplicateur pour détecter le squeeze
 WALL_DETECTION_MULTIPLIER = 1.5  # Mur = 1.5x la moyenne
 WALL_DISTANCE_THRESHOLD = 0.01  # 1% du prix pour être considéré comme "proche"
 
-# Configuration du backtesting (si implémenté)
+# ============================================================================
+# FILTRES D'ENTRÉE SCALPING
+# ============================================================================
+MIN_VOLUME_MULTIPLIER = 1.5  # Volume >150% moyenne 20 périodes
+MAX_SPREAD_PERCENT = 0.05  # Spread max 0.05% (éviter trades si spread trop élevé)
+MIN_DISTANCE_SR_PERCENT = 0.3  # Distance minimum du dernier S/R: 0.3%
+SIGNAL_QUALITY_THRESHOLD = 70  # Score qualité minimum pour entrer (0-100)
+
+# ATR Range acceptable pour scalping
+ATR_MIN_PERCENT = 0.4  # ATR minimum 0.4% du prix
+ATR_MAX_PERCENT = 1.2  # ATR maximum 1.2% du prix
+
+# ============================================================================
+# MONEY MANAGEMENT SCALPING
+# ============================================================================
+MAX_POSITIONS = 3  # Maximum 3 positions simultanées
+RISK_PER_TRADE = 0.015  # 1.5% du capital par trade (Kelly Criterion adapté)
+MAX_DAILY_DRAWDOWN = 0.05  # Arrêter trading si drawdown journalier >5%
+MAX_POSITION_HEAT = 0.08  # Heat max: 8% du capital (nb positions * risk)
+
+# Ajustement dynamique de la taille
+WINRATE_THRESHOLD_INCREASE = 0.60  # Augmenter taille si winrate >60% sur 20 trades
+CONSECUTIVE_LOSSES_REDUCE = 3  # Réduire taille après 3 pertes consécutives
+
+# ============================================================================
+# ORDER BOOK PROFOND
+# ============================================================================
+ORDERBOOK_DEPTH = 50  # Top 50 niveaux (au lieu de 20)
+ORDERBOOK_IMBALANCE_LEVELS = 10  # Calculer imbalance sur 10 premiers niveaux
+ICEBERG_DETECTION = True  # Détecter les iceberg orders
+
+# ============================================================================
+# OPTIMISATION FRAIS (MAKER vs TAKER)
+# ============================================================================
+PREFER_MAKER_ORDERS = True  # Privilégier LIMIT orders (maker rebate)
+MAKER_OFFSET_PERCENT = 0.01  # Placer orders 0.01% below/above pour être maker
+ORDER_TIMEOUT_SECONDS = 2  # Cancel & replace si pas fill en 2 secondes
+
+# ============================================================================
+# BACKTESTING ENGINE
+# ============================================================================
 BACKTEST_INITIAL_CAPITAL = 10000.0
-BACKTEST_COMMISSION = 0.001  # 0.1%
-BACKTEST_SLIPPAGE = 0.0005  # 0.05%
+BACKTEST_COMMISSION_TAKER = 0.00035  # 0.035% (frais réels Hyperliquid)
+BACKTEST_COMMISSION_MAKER = 0.0001   # 0.01% (frais réels Hyperliquid)
+BACKTEST_SLIPPAGE = 0.0002  # 0.02% par trade (scalping)
+BACKTEST_LATENCY_MS = 100  # Latence simulée 50-150ms (moyenne 100ms)
+BACKTEST_MIN_DAYS = 30  # Minimum 30 jours de données historiques
+
+# Métriques cibles backtest
+TARGET_WINRATE = 0.55  # Winrate cible >55%
+TARGET_PROFIT_FACTOR = 1.3  # Profit factor cible >1.3
+TARGET_MAX_DRAWDOWN = 0.12  # Max drawdown cible <12%

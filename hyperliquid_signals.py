@@ -282,28 +282,74 @@ class HyperliquidSignalGenerator:
         return ema
     
     def calculate_macd(self, prices: List[float]) -> Dict[str, float]:
-        """Calcule le MACD (Moving Average Convergence Divergence)"""
-        if len(prices) < 26:
+        """
+        Calcule le MACD (Moving Average Convergence Divergence) - OPTIMISÉ
+        Utilise un calcul incrémental pour éviter O(n²)
+        """
+        try:
+            import config
+            macd_fast = getattr(config, 'MACD_FAST', 8)
+            macd_slow = getattr(config, 'MACD_SLOW', 21)
+            macd_signal = getattr(config, 'MACD_SIGNAL', 5)
+        except:
+            macd_fast = 8
+            macd_slow = 21
+            macd_signal = 5
+        
+        if len(prices) < macd_slow:
             return {'value': 0, 'signal': 0, 'histogram': 0}
         
-        ema12 = self.calculate_ema(prices, 12)
-        ema26 = self.calculate_ema(prices, 26)
-        macd_line = ema12 - ema26
+        # Calcul EMA rapide et lente de manière optimisée
+        ema_fast = self.calculate_ema(prices, macd_fast)
+        ema_slow = self.calculate_ema(prices, macd_slow)
+        macd_line = ema_fast - ema_slow
         
-        # Calcul de la ligne de signal (EMA 9 du MACD)
+        # Calcul de la ligne de signal (EMA du MACD) - OPTIMISÉ
+        # Calculer les valeurs MACD de manière incrémentale
         macd_values = []
-        for i in range(26, len(prices) + 1):
-            ema12_i = self.calculate_ema(prices[:i], 12)
-            ema26_i = self.calculate_ema(prices[:i], 26)
-            macd_values.append(ema12_i - ema26_i)
         
-        signal_line = self.calculate_ema(macd_values, 9) if len(macd_values) >= 9 else 0
+        # Calculer EMA fast et slow pour chaque point (de manière optimisée)
+        if len(prices) >= macd_slow:
+            # Utiliser une approche plus efficace : calculer seulement les dernières valeurs nécessaires
+            # Pour la ligne de signal, on a besoin des valeurs MACD depuis macd_slow jusqu'à la fin
+            # Mais on peut simplifier en calculant seulement les dernières valeurs
+            
+            # Calculer MACD pour les dernières N périodes (assez pour EMA signal)
+            # On a besoin d'au moins macd_signal valeurs MACD pour calculer l'EMA signal
+            start_idx = max(macd_slow, len(prices) - 50)  # Calculer seulement les 50 dernières si possible
+            
+            for i in range(start_idx, len(prices)):
+                # Calculer EMA fast et slow pour cette position
+                ema_fast_i = self.calculate_ema(prices[:i+1], macd_fast)
+                ema_slow_i = self.calculate_ema(prices[:i+1], macd_slow)
+                macd_values.append(ema_fast_i - ema_slow_i)
+            
+            # Si on n'a pas assez de valeurs, calculer depuis macd_slow
+            if len(macd_values) < macd_signal:
+                macd_values = []
+                for i in range(macd_slow, len(prices)):
+                    ema_fast_i = self.calculate_ema(prices[:i+1], macd_fast)
+                    ema_slow_i = self.calculate_ema(prices[:i+1], macd_slow)
+                    macd_values.append(ema_fast_i - ema_slow_i)
+        
+        # Calculer la ligne de signal (EMA du MACD)
+        if len(macd_values) >= macd_signal:
+            signal_line = self.calculate_ema(macd_values, macd_signal)
+        else:
+            # Si pas assez de valeurs, utiliser une approximation
+            signal_line = macd_line * 0.8  # Approximation
+            # Ou calculer avec les valeurs disponibles
+            if len(macd_values) > 0:
+                signal_line = sum(macd_values) / len(macd_values)
+            else:
+                signal_line = 0
+        
         histogram = macd_line - signal_line
         
         return {
-            'value': macd_line,
-            'signal': signal_line,
-            'histogram': histogram
+            'value': round(macd_line, 4),
+            'signal': round(signal_line, 4),
+            'histogram': round(histogram, 4)
         }
     
     def calculate_bollinger_bands(self, prices: List[float], period: int = 20, std_dev: int = 2) -> Dict[str, float]:
@@ -360,13 +406,21 @@ class HyperliquidSignalGenerator:
         
         return {'poc': poc, 'vah': vah, 'val': val}
     
-    def calculate_order_flow_imbalance(self, bids: List[Dict], asks: List[Dict], levels: int = 10) -> float:
-        """Calcule le déséquilibre du flux d'ordres"""
+    def calculate_order_flow_imbalance(self, bids: List[Dict], asks: List[Dict], levels: int = None) -> float:
+        """Calcule le déséquilibre du flux d'ordres sur N niveaux"""
         if not bids or not asks:
             return 0.0
         
-        bid_volume = sum(float(b.get('sz', 0)) for b in bids[:levels])
-        ask_volume = sum(float(a.get('sz', 0)) for a in asks[:levels])
+        # Utiliser la config ou valeur par défaut
+        if levels is None:
+            try:
+                import config
+                levels = getattr(config, 'ORDERBOOK_IMBALANCE_LEVELS', 10)
+            except:
+                levels = 10
+        
+        bid_volume = sum(float(b.get('sz', b.get('size', b.get('s', 0)))) if isinstance(b, dict) else float(b[1] if isinstance(b, (list, tuple)) and len(b) >= 2 else 0) for b in bids[:levels])
+        ask_volume = sum(float(a.get('sz', a.get('size', a.get('s', 0)))) if isinstance(a, dict) else float(a[1] if isinstance(a, (list, tuple)) and len(a) >= 2 else 0) for a in asks[:levels])
         
         total_volume = bid_volume + ask_volume
         if total_volume == 0:
@@ -376,7 +430,10 @@ class HyperliquidSignalGenerator:
         return imbalance
     
     def analyze_order_book_depth(self, bids: List[Dict], asks: List[Dict], price: float) -> Dict:
-        """Analyse approfondie du carnet d'ordres pour identifier les niveaux clés"""
+        """
+        Analyse approfondie du carnet d'ordres (50 niveaux) pour scalping
+        Détecte: murs, iceberg orders, liquidité, spread
+        """
         if not bids or not asks:
             return {
                 'support_levels': [],
@@ -385,15 +442,32 @@ class HyperliquidSignalGenerator:
                 'order_book_imbalance': 0,
                 'wall_detected': False,
                 'wall_price': 0,
-                'wall_side': None
+                'wall_side': None,
+                'spread_percent': 0,
+                'bid_ask_ratio': 0,
+                'liquidity_depth': 0,
+                'iceberg_detected': False
             }
         
-        # Analyser les murs d'ordres (walls)
+        # Profondeur configurable (50 niveaux pour scalping)
+        try:
+            import config
+            depth = getattr(config, 'ORDERBOOK_DEPTH', 50)
+        except:
+            depth = 50
+        
+        # Calculer le spread
+        best_bid = float(bids[0][0] if isinstance(bids[0], (list, tuple)) else bids[0].get('px', bids[0].get('price', bids[0].get('p', 0))))
+        best_ask = float(asks[0][0] if isinstance(asks[0], (list, tuple)) else asks[0].get('px', asks[0].get('price', asks[0].get('p', 0))))
+        spread_abs = best_ask - best_bid
+        spread_percent = (spread_abs / best_bid * 100) if best_bid > 0 else 0
+        
+        # Analyser les murs d'ordres (walls) - 50 niveaux
         bid_walls = []
         ask_walls = []
         
         # Identifier les murs dans les bids (support)
-        for i, bid in enumerate(bids[:20]):
+        for i, bid in enumerate(bids[:depth]):
             # Gérer différents formats de données
             if isinstance(bid, dict):
                 size = float(bid.get('sz', bid.get('size', bid.get('s', 0))))
@@ -508,16 +582,22 @@ class HyperliquidSignalGenerator:
         # Niveaux de résistance (top 3 asks les plus volumineux)
         resistance_levels = sorted(ask_walls, key=lambda x: x['size'], reverse=True)[:3]
         
-        # Déséquilibre du carnet d'ordres
+        # Déséquilibre du carnet d'ordres sur N niveaux
+        try:
+            import config
+            imbalance_levels = getattr(config, 'ORDERBOOK_IMBALANCE_LEVELS', 10)
+        except:
+            imbalance_levels = 10
+        
         total_bid_vol = 0
-        for b in bids[:10]:
+        for b in bids[:imbalance_levels]:
             if isinstance(b, dict):
                 total_bid_vol += float(b.get('sz', b.get('size', b.get('s', 0))))
             elif isinstance(b, (list, tuple)) and len(b) >= 2:
                 total_bid_vol += float(b[1])
         
         total_ask_vol = 0
-        for a in asks[:10]:
+        for a in asks[:imbalance_levels]:
             if isinstance(a, dict):
                 total_ask_vol += float(a.get('sz', a.get('size', a.get('s', 0))))
             elif isinstance(a, (list, tuple)) and len(a) >= 2:
@@ -525,6 +605,51 @@ class HyperliquidSignalGenerator:
         
         total_vol = total_bid_vol + total_ask_vol
         imbalance = ((total_bid_vol - total_ask_vol) / total_vol * 100) if total_vol > 0 else 0
+        
+        # Bid/Ask Ratio
+        bid_ask_ratio = total_bid_vol / total_ask_vol if total_ask_vol > 0 else 1.0
+        
+        # Liquidity Depth (volume total sur 50 niveaux)
+        liquidity_depth = total_vol
+        
+        # Détection d'Iceberg Orders (volumes cachés)
+        # Un iceberg se caractérise par: volume constant à plusieurs niveaux consécutifs
+        iceberg_detected = False
+        try:
+            import config
+            if getattr(config, 'ICEBERG_DETECTION', True):
+                # Analyser les 20 premiers niveaux
+                bid_sizes = []
+                ask_sizes = []
+                
+                for b in bids[:20]:
+                    if isinstance(b, dict):
+                        bid_sizes.append(float(b.get('sz', b.get('size', b.get('s', 0)))))
+                    elif isinstance(b, (list, tuple)) and len(b) >= 2:
+                        bid_sizes.append(float(b[1]))
+                
+                for a in asks[:20]:
+                    if isinstance(a, dict):
+                        ask_sizes.append(float(a.get('sz', a.get('size', a.get('s', 0)))))
+                    elif isinstance(a, (list, tuple)) and len(a) >= 2:
+                        ask_sizes.append(float(a[1]))
+                
+                # Détecter si volumes similaires sur plusieurs niveaux consécutifs
+                if len(bid_sizes) >= 5:
+                    for i in range(len(bid_sizes) - 4):
+                        window = bid_sizes[i:i+5]
+                        if len(set([round(s, 2) for s in window])) <= 2:  # Max 2 valeurs différentes
+                            iceberg_detected = True
+                            break
+                
+                if not iceberg_detected and len(ask_sizes) >= 5:
+                    for i in range(len(ask_sizes) - 4):
+                        window = ask_sizes[i:i+5]
+                        if len(set([round(s, 2) for s in window])) <= 2:
+                            iceberg_detected = True
+                            break
+        except:
+            pass
         
         return {
             'support_levels': [s['price'] for s in support_levels],
@@ -534,7 +659,14 @@ class HyperliquidSignalGenerator:
             'wall_detected': closest_wall is not None,
             'wall_price': closest_wall['price'] if closest_wall else 0,
             'wall_side': wall_side,
-            'wall_size': closest_wall['size'] if closest_wall else 0
+            'wall_size': closest_wall['size'] if closest_wall else 0,
+            'spread_percent': round(spread_percent, 4),
+            'spread_abs': round(spread_abs, 2),
+            'bid_ask_ratio': round(bid_ask_ratio, 2),
+            'liquidity_depth': round(liquidity_depth, 2),
+            'iceberg_detected': iceberg_detected,
+            'best_bid': round(best_bid, 2),
+            'best_ask': round(best_ask, 2)
         }
     
     def calculate_atr(self, candles: List[Dict], period: int = 14) -> float:
@@ -1145,6 +1277,105 @@ class HyperliquidSignalGenerator:
         cci = (typical_prices[-1] - sma) / (0.015 * mean_deviation)
         return round(cci, 2)
     
+    def calculate_vwap(self, candles: List[Dict], period: int = None) -> float:
+        """
+        Calcule le VWAP (Volume Weighted Average Price) intraday
+        Pour scalping: VWAP sur les dernières N bougies
+        """
+        if not candles:
+            return 0.0
+        
+        # Utiliser toutes les bougies de la journée ou période spécifiée
+        if period is None:
+            # Par défaut: toutes les bougies disponibles (intraday)
+            period = len(candles)
+        
+        recent = candles[-period:] if len(candles) > period else candles
+        
+        total_volume_price = sum(c['close'] * c.get('volume', 0) for c in recent)
+        total_volume = sum(c.get('volume', 0) for c in recent)
+        
+        if total_volume == 0:
+            return candles[-1]['close'] if candles else 0.0
+        
+        vwap = total_volume_price / total_volume
+        return round(vwap, 2)
+    
+    def calculate_order_flow_delta(self, trades: List[Dict] = None) -> Dict:
+        """
+        Calcule l'Order Flow Delta (buy volume - sell volume)
+        Pour scalping: analyse des trades récents
+        """
+        if not trades or len(trades) < 10:
+            return {
+                'delta': 0,
+                'buy_volume': 0,
+                'sell_volume': 0,
+                'delta_percent': 0
+            }
+        
+        buy_volume = 0
+        sell_volume = 0
+        
+        for trade in trades[-50:]:  # 50 derniers trades
+            # Déterminer si c'est un buy ou sell (aggressor)
+            # Format attendu: {'side': 'buy'/'sell', 'size': float, 'price': float}
+            side = trade.get('side', '').lower()
+            size = float(trade.get('size', trade.get('sz', 0)))
+            
+            if side in ['buy', 'b']:
+                buy_volume += size
+            elif side in ['sell', 's']:
+                sell_volume += size
+        
+        delta = buy_volume - sell_volume
+        total_volume = buy_volume + sell_volume
+        delta_percent = (delta / total_volume * 100) if total_volume > 0 else 0
+        
+        return {
+            'delta': round(delta, 2),
+            'buy_volume': round(buy_volume, 2),
+            'sell_volume': round(sell_volume, 2),
+            'delta_percent': round(delta_percent, 2)
+        }
+    
+    def calculate_cumulative_delta(self, trades: List[Dict] = None) -> Dict:
+        """
+        Calcule le Cumulative Delta (somme cumulative des deltas)
+        Indicateur de momentum pour scalping
+        """
+        if not trades or len(trades) < 10:
+            return {
+                'cumulative_delta': 0,
+                'delta_trend': 'neutral'
+            }
+        
+        cumulative = 0
+        deltas = []
+        
+        for trade in trades[-100:]:  # 100 derniers trades
+            side = trade.get('side', '').lower()
+            size = float(trade.get('size', trade.get('sz', 0)))
+            
+            if side in ['buy', 'b']:
+                cumulative += size
+            elif side in ['sell', 's']:
+                cumulative -= size
+            
+            deltas.append(cumulative)
+        
+        # Déterminer la tendance
+        if len(deltas) >= 2:
+            trend = 'bullish' if deltas[-1] > deltas[-10] else 'bearish' if deltas[-1] < deltas[-10] else 'neutral'
+        else:
+            trend = 'neutral'
+        
+        return {
+            'cumulative_delta': round(cumulative, 2),
+            'delta_trend': trend,
+            'delta_values': deltas[-20:]  # 20 dernières valeurs
+        }
+    
     def detect_price_action_signals(self, candles: List[Dict], price: float) -> List[Dict]:
         """Détecte les signaux basés sur l'action du prix (très rapide)"""
         if len(candles) < 5:
@@ -1200,115 +1431,273 @@ class HyperliquidSignalGenerator:
         self,
         signal: str,
         price: float,
-        bollinger: Dict[str, float],
-        volume_profile: Dict[str, float],
-        ema20: float,
-        ema50: float,
-        rsi: float,
+        bollinger: Dict[str, float] = None,
+        volume_profile: Dict[str, float] = None,
+        ema20: float = None,
+        ema50: float = None,
+        rsi: float = None,
+        atr: float = None,
         fees: Dict[str, float] = None
     ) -> Dict[str, float]:
-        """Calcule les niveaux de Stop Loss et Take Profit avec prise en compte des frais"""
+        """
+        Calcule les niveaux de Stop Loss et Take Profit pour SCALPING AGRESSIF
+        SL: 0.3% à 0.8% | TP: 1.0%, 1.8%, 2.5% (multi-niveaux)
+        """
         if signal == "NEUTRE":
             return {
                 'stop_loss': 0,
                 'take_profit': 0,
+                'take_profit_1': 0,
+                'take_profit_2': 0,
+                'take_profit_3': 0,
                 'stop_loss_percent': 0,
                 'take_profit_percent': 0,
                 'risk_reward': 0,
                 'fees': fees or {}
             }
         
-        # Frais par défaut si non fournis (avec réductions si configurées)
+        # Frais par défaut si non fournis
         if fees is None:
             try:
                 import config
                 api_config = config.HYPERLIQUID_API
                 fees = self.get_hyperliquid_fees(
-                    volume_14d=api_config.get('volume_14d', api_config.get('volume_30d', 0)),  # Support volume_14d ou volume_30d
+                    volume_14d=api_config.get('volume_14d', api_config.get('volume_30d', 0)),
                     use_referral=api_config.get('use_referral', False),
                     staking_tier=api_config.get('staking_tier', None)
                 )
             except:
                 fees = self.get_hyperliquid_fees()
         
-        # Calcul basé sur les Bollinger Bands et Volume Profile
-        bb_range = bollinger['upper'] - bollinger['lower']
-        atr_estimate = bb_range / 4  # Estimation de l'ATR basée sur les BB
+        # Configuration scalping depuis config.py
+        try:
+            import config
+            max_sl_percent = getattr(config, 'MAX_STOP_LOSS_PERCENT', 0.8)
+            min_sl_percent = getattr(config, 'MIN_STOP_LOSS_PERCENT', 0.3)
+            tp1_percent = getattr(config, 'TP1_PERCENT', 1.0)
+            tp2_percent = getattr(config, 'TP2_PERCENT', 1.8)
+            tp3_percent = getattr(config, 'TP3_PERCENT', 2.5)
+        except:
+            max_sl_percent = 0.8
+            min_sl_percent = 0.3
+            tp1_percent = 1.0
+            tp2_percent = 1.8
+            tp3_percent = 2.5
+        
+        # Utiliser ATR si disponible, sinon estimation
+        if atr and atr > 0:
+            # SL basé sur ATR: 0.5x à 1.5x ATR
+            atr_sl_percent = (atr / price) * 100
+            sl_percent = max(min_sl_percent, min(max_sl_percent, atr_sl_percent * 0.8))
+        else:
+            # SL par défaut: moyenne entre min et max
+            sl_percent = (min_sl_percent + max_sl_percent) / 2
+        
+        # Calcul basé sur les Bollinger Bands et Volume Profile (si disponibles)
+        if bollinger and volume_profile:
+            bb_range = bollinger['upper'] - bollinger['lower']
+            atr_estimate = bb_range / 4
         
         # Ajouter les frais dans le calcul (frais taker pour entrée et sortie)
         # Utiliser les frais effectifs avec réductions appliquées
         taker_fee_effective = fees.get('effective_taker_percent', fees.get('taker_percent', 0.035))
         total_fees_percent = (taker_fee_effective / 100) * 2  # Entrée + sortie (en décimal)
         
+        # SCALPING: Calculs simplifiés avec pourcentages fixes
         if signal == "ACHAT":
-            # Stop Loss : sous la bande inférieure BB ou VAL, ou EMA 50
-            sl_candidates = [
-                bollinger['lower'] - (atr_estimate * 0.5),
-                volume_profile['val'] - (atr_estimate * 0.3),
-                ema50 - (atr_estimate * 0.5)
-            ]
-            stop_loss = min(sl_candidates)
-            # Ajuster le SL pour inclure les frais (on doit couvrir les frais + la perte)
-            stop_loss = max(stop_loss, price * (0.97 - total_fees_percent / 100))
+            # Stop Loss: prix - SL%
+            stop_loss = price * (1 - sl_percent / 100)
             
-            # Take Profit : multiples niveaux (ajuster pour les frais)
-            tp1 = bollinger['middle']  # Premier objectif : milieu BB
-            tp2 = bollinger['upper']  # Deuxième objectif : bande supérieure
-            tp3 = volume_profile['vah']  # Troisième objectif : VAH
-            take_profit = max(tp1, tp2, tp3)
-            # Ajuster le TP pour compenser les frais (on veut un gain net après frais)
-            take_profit = min(take_profit, price * (1.10 + total_fees_percent / 100))
+            # Take Profit multi-niveaux
+            take_profit_1 = price * (1 + tp1_percent / 100)
+            take_profit_2 = price * (1 + tp2_percent / 100)
+            take_profit_3 = price * (1 + tp3_percent / 100)
+            take_profit = take_profit_3  # Principal = TP3
             
         else:  # VENTE
-            # Stop Loss : au-dessus de la bande supérieure BB ou VAH, ou EMA 50
-            sl_candidates = [
-                bollinger['upper'] + (atr_estimate * 0.5),
-                volume_profile['vah'] + (atr_estimate * 0.3),
-                ema50 + (atr_estimate * 0.5)
-            ]
-            stop_loss = max(sl_candidates)
-            # Ajuster le SL pour inclure les frais
-            stop_loss = min(stop_loss, price * (1.03 + total_fees_percent / 100))
+            # Stop Loss: prix + SL%
+            stop_loss = price * (1 + sl_percent / 100)
             
-            # Take Profit : multiples niveaux (ajuster pour les frais)
-            tp1 = bollinger['middle']  # Premier objectif : milieu BB
-            tp2 = bollinger['lower']  # Deuxième objectif : bande inférieure
-            tp3 = volume_profile['val']  # Troisième objectif : VAL
-            take_profit = min(tp1, tp2, tp3)
-            # Ajuster le TP pour compenser les frais
-            take_profit = max(take_profit, price * (0.90 - total_fees_percent / 100))
+            # Take Profit multi-niveaux
+            take_profit_1 = price * (1 - tp1_percent / 100)
+            take_profit_2 = price * (1 - tp2_percent / 100)
+            take_profit_3 = price * (1 - tp3_percent / 100)
+            take_profit = take_profit_3  # Principal = TP3
         
         # Calculs des pourcentages
         if signal == "ACHAT":
-            sl_percent = ((price - stop_loss) / price) * 100
-            tp_percent = ((take_profit - price) / price) * 100
+            sl_percent_calc = ((price - stop_loss) / price) * 100
+            tp_percent_calc = ((take_profit - price) / price) * 100
         else:
-            sl_percent = ((stop_loss - price) / price) * 100
-            tp_percent = ((price - take_profit) / price) * 100
+            sl_percent_calc = ((stop_loss - price) / price) * 100
+            tp_percent_calc = ((price - take_profit) / price) * 100
         
         # Risk/Reward Ratio (net après frais)
-        risk_reward = tp_percent / sl_percent if sl_percent > 0 else 0
+        risk_reward = tp_percent_calc / sl_percent_calc if sl_percent_calc > 0 else 0
         
         # Calcul du gain/perte net après frais
         if signal == "ACHAT":
-            net_gain_percent = tp_percent - total_fees_percent
-            net_loss_percent = sl_percent + total_fees_percent
+            net_gain_percent = tp_percent_calc - total_fees_percent * 100
+            net_loss_percent = sl_percent_calc + total_fees_percent * 100
         else:
-            net_gain_percent = tp_percent - total_fees_percent
-            net_loss_percent = sl_percent + total_fees_percent
+            net_gain_percent = tp_percent_calc - total_fees_percent * 100
+            net_loss_percent = sl_percent_calc + total_fees_percent * 100
         
         return {
             'stop_loss': round(stop_loss, 2),
             'take_profit': round(take_profit, 2),
-            'stop_loss_percent': round(sl_percent, 2),
-            'take_profit_percent': round(tp_percent, 2),
+            'take_profit_1': round(take_profit_1, 2),
+            'take_profit_2': round(take_profit_2, 2),
+            'take_profit_3': round(take_profit_3, 2),
+            'stop_loss_percent': round(sl_percent_calc, 2),
+            'take_profit_percent': round(tp_percent_calc, 2),
             'risk_reward': round(risk_reward, 2),
             'fees': fees,
-            'total_fees_percent': round(total_fees_percent, 3),
+            'total_fees_percent': round(total_fees_percent * 100, 3),
             'net_gain_percent': round(net_gain_percent, 2),
             'net_loss_percent': round(net_loss_percent, 2),
-            'break_even': round(price * (1 + total_fees_percent / 100) if signal == "ACHAT" else price * (1 - total_fees_percent / 100), 2)
+            'break_even': round(price * (1 + total_fees_percent) if signal == "ACHAT" else price * (1 - total_fees_percent), 2)
         }
+    
+    def should_enter_trade(self, analysis: Dict) -> Tuple[bool, str]:
+        """
+        Vérifie si on doit entrer dans le trade selon les filtres scalping
+        
+        Returns:
+            (should_enter: bool, reason: str)
+        """
+        try:
+            import config
+        except:
+            return False, "Config non disponible"
+        
+        # 1. Volume >150% moyenne 20 périodes
+        candles = analysis.get('candles', [])
+        if len(candles) >= 20:
+            recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
+            avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
+            if avg_volume > 0:
+                volume_ratio = recent_volume / (avg_volume * 5)
+                min_volume = getattr(config, 'MIN_VOLUME_MULTIPLIER', 1.5)
+                if volume_ratio < min_volume:
+                    return False, f"Volume insuffisant: {volume_ratio:.2f}x (min: {min_volume}x)"
+        
+        # 2. ATR dans range acceptable (0.4% à 1.2%)
+        atr = analysis.get('indicators', {}).get('atr', 0)
+        current_price = analysis.get('current_price', 0)
+        if current_price > 0 and atr > 0:
+            atr_percent = (atr / current_price) * 100
+            atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.4)
+            atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2)
+            if atr_percent < atr_min:
+                return False, f"ATR trop faible: {atr_percent:.2f}% (min: {atr_min}%)"
+            if atr_percent > atr_max:
+                return False, f"ATR trop élevé: {atr_percent:.2f}% (max: {atr_max}%)"
+        
+        # 3. Spread <0.05%
+        spread = analysis.get('spread', 0.1)
+        max_spread = getattr(config, 'MAX_SPREAD_PERCENT', 0.05)
+        if spread > max_spread:
+            return False, f"Spread trop élevé: {spread:.3f}% (max: {max_spread}%)"
+        
+        # 4. Distance du dernier S/R >0.3%
+        key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
+        supports = key_levels.get('supports', [])
+        resistances = key_levels.get('resistances', [])
+        
+        min_distance = float('inf')
+        for support in supports:
+            if support > 0:
+                distance = abs(current_price - support) / current_price * 100
+                min_distance = min(min_distance, distance)
+        for resistance in resistances:
+            if resistance > 0:
+                distance = abs(current_price - resistance) / current_price * 100
+                min_distance = min(min_distance, distance)
+        
+        if min_distance < float('inf'):
+            min_distance_sr = getattr(config, 'MIN_DISTANCE_SR_PERCENT', 0.3)
+            if min_distance < min_distance_sr:
+                return False, f"Trop proche d'un S/R: {min_distance:.2f}% (min: {min_distance_sr}%)"
+        
+        # 5. Score qualité signal >70
+        signal_quality = self._calculate_signal_quality(analysis)
+        quality_threshold = getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 70)
+        if signal_quality < quality_threshold:
+            return False, f"Score qualité insuffisant: {signal_quality:.1f}/100 (min: {quality_threshold})"
+        
+        return True, "OK"
+    
+    def _calculate_signal_quality(self, analysis: Dict) -> float:
+        """
+        Calcule le score de qualité du signal (0-100)
+        Utilisé par should_enter_trade() et generate_advanced_trading_signal()
+        """
+        score = 0.0
+        
+        # 1. Confluence d'indicateurs (20%)
+        signal_details = analysis.get('signal_details', {})
+        buy_signals = signal_details.get('buy_signals', 0)
+        sell_signals = signal_details.get('sell_signals', 0)
+        total_signals = buy_signals + sell_signals
+        if total_signals > 0:
+            confluence_score = min(total_signals / 10.0, 1.0) * 20
+            score += confluence_score
+        
+        # 2. Proximité support/résistance (25%)
+        current_price = analysis.get('current_price', 0)
+        key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
+        supports = key_levels.get('supports', [])
+        resistances = key_levels.get('resistances', [])
+        
+        min_distance = float('inf')
+        for support in supports:
+            if support > 0:
+                distance = abs(current_price - support) / current_price * 100
+                min_distance = min(min_distance, distance)
+        for resistance in resistances:
+            if resistance > 0:
+                distance = abs(current_price - resistance) / current_price * 100
+                min_distance = min(min_distance, distance)
+        
+        if min_distance < float('inf'):
+            # Plus proche = meilleur score (max 0.5% = score 25)
+            sr_score = max(0, 25 - (min_distance * 50))
+            score += sr_score
+        
+        # 3. Volume relatif (15%)
+        candles = analysis.get('candles', [])
+        if len(candles) >= 20:
+            recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
+            avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
+            if avg_volume > 0:
+                volume_ratio = recent_volume / (avg_volume * 5)
+                volume_score = min(volume_ratio / 1.5, 1.0) * 15
+                score += volume_score
+        
+        # 4. Spread bid/ask (10%)
+        spread = analysis.get('spread', 0.1)
+        if spread < 0.05:
+            spread_score = 10
+        elif spread < 0.1:
+            spread_score = 5
+        else:
+            spread_score = 0
+        score += spread_score
+        
+        # 5. Momentum short-term (15%)
+        momentum = analysis.get('advanced_analysis', {}).get('momentum', {})
+        momentum_percent = abs(momentum.get('momentum_percent', 0))
+        momentum_score = min(momentum_percent / 2.0, 1.0) * 15
+        score += momentum_score
+        
+        # 6. Order book imbalance (15%)
+        order_book = analysis.get('advanced_analysis', {}).get('order_book', {})
+        imbalance = abs(order_book.get('order_book_imbalance', 0))
+        imbalance_score = min(imbalance / 20.0, 1.0) * 15
+        score += imbalance_score
+        
+        return min(score, 100.0)
     
     def generate_trading_signal(
         self,
@@ -1467,11 +1856,29 @@ class HyperliquidSignalGenerator:
         # 6. Momentum et micro-structure
         momentum = self.calculate_momentum(closes, 10)
         
-        # 7. NOUVEAUX INDICATEURS POUR SIGNAUX RAPIDES
-        stochastic = self.calculate_stochastic(self.candles, 14)
-        williams_r = self.calculate_williams_r(self.candles, 14)
-        cci = self.calculate_cci(self.candles, 20)
+        # 7. NOUVEAUX INDICATEURS POUR SIGNAUX RAPIDES (SCALPING)
+        try:
+            import config
+            rsi_period = getattr(config, 'RSI_PERIOD', 7)
+            stoch_period = getattr(config, 'STOCHASTIC_PERIOD', 7)
+            williams_period = getattr(config, 'WILLIAMS_R_PERIOD', 7)
+            cci_period = getattr(config, 'CCI_PERIOD', 10)
+        except:
+            rsi_period = 7
+            stoch_period = 7
+            williams_period = 7
+            cci_period = 10
+        
+        stochastic = self.calculate_stochastic(self.candles, stoch_period)
+        williams_r = self.calculate_williams_r(self.candles, williams_period)
+        cci = self.calculate_cci(self.candles, cci_period)
         price_action = self.detect_price_action_signals(self.candles, self.current_price)
+        
+        # 8. INDICATEURS SCALPING AVANCÉS
+        vwap = self.calculate_vwap(self.candles)
+        # Order Flow Delta (nécessite des trades - sera calculé si disponible)
+        order_flow_delta = {'delta': 0, 'delta_percent': 0}  # Par défaut
+        cumulative_delta = {'cumulative_delta': 0, 'delta_trend': 'neutral'}
         
         # Order flow (existant)
         order_flow = 0
@@ -1492,11 +1899,30 @@ class HyperliquidSignalGenerator:
         # Récupérer les frais Hyperliquid
         fees = self.get_hyperliquid_fees()
         
-        # Calcul des niveaux de Stop Loss et Take Profit (avec frais)
+        # Calcul des niveaux de Stop Loss et Take Profit (avec frais) - SCALPING
         sl_tp = self.calculate_sl_tp(
             signal, self.current_price, bollinger, 
-            volume_profile, ema20, ema50, rsi, fees
+            volume_profile, ema20, ema50, rsi, atr, fees
         )
+        
+        # Calculer le score de qualité du signal
+        analysis_dict = {
+            'signal': signal,
+            'signal_details': signal_details,
+            'current_price': self.current_price,
+            'candles': self.candles,
+            'indicators': {'atr': atr},
+            'spread': order_book_analysis.get('spread_percent', 0.1),
+            'advanced_analysis': {
+                'key_levels': key_levels,
+                'order_book': order_book_analysis,
+                'momentum': momentum
+            }
+        }
+        signal_quality = self._calculate_signal_quality(analysis_dict)
+        
+        # Vérifier si on doit entrer dans le trade
+        should_enter, enter_reason = self.should_enter_trade(analysis_dict)
         
         return {
             'timestamp': datetime.now().isoformat(),
@@ -1531,8 +1957,14 @@ class HyperliquidSignalGenerator:
                 'stochastic': stochastic,
                 'williams_r': williams_r,
                 'cci': round(cci, 2),
+                'vwap': round(vwap, 2),
+                'order_flow_delta': order_flow_delta,
+                'cumulative_delta': cumulative_delta,
                 'fees': fees
             },
+            'signal_quality': round(signal_quality, 1),
+            'should_enter_trade': should_enter,
+            'enter_reason': enter_reason,
             'advanced_analysis': {
                 'order_book': order_book_analysis,
                 'volatility': volatility_regime,
