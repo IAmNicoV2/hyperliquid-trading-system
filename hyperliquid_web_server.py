@@ -274,7 +274,14 @@ def init_generator():
             coin=config.DEFAULT_COIN,
             interval=config.DEFAULT_INTERVAL
         )
-        logger.info(f"✅ Générateur initialisé: {config.DEFAULT_COIN} ({config.DEFAULT_INTERVAL})")
+        # Charger les données historiques nécessaires pour l'analyse
+        logger.info(f"📥 Chargement des données historiques pour {config.DEFAULT_COIN}...")
+        candles = signal_generator.fetch_historical_candles(limit=200)
+        if candles:
+            signal_generator.candles = candles
+            logger.info(f"✅ Générateur initialisé: {config.DEFAULT_COIN} ({config.DEFAULT_INTERVAL}) - {len(candles)} chandeliers")
+        else:
+            logger.warning(f"⚠️  Aucun chandelier récupéré, le générateur utilisera les données en temps réel")
         return True
     except Exception as e:
         logger.error(f"❌ Erreur initialisation: {e}", exc_info=True)
@@ -320,29 +327,46 @@ def get_signal():
     global current_signal
     
     if not signal_generator:
-        return jsonify({'error': 'Générateur non initialisé'}), 500
+        return jsonify({'error': 'Générateur non initialisé', 'signal': 'NEUTRE'}), 200
     
-    if current_signal is None:
-        # Générer un signal immédiatement
-        try:
-            analysis = signal_generator.analyze()
-            if 'error' not in analysis:
-                current_signal = {
-                    'signal': analysis.get('signal', 'NEUTRE'),
-                    'signal_quality': analysis.get('signal_quality', 0),
-                    'current_price': analysis.get('current_price', 0),
-                    'coin': signal_generator.coin,
-                    'indicators': analysis.get('indicators', {}),
-                    'volume_ratio': analysis.get('volume_ratio', 0),
-                    'timestamp': datetime.now().isoformat()
-                }
-            else:
-                return jsonify({'error': analysis.get('error')}), 500
-        except Exception as e:
-            logger.error(f"Erreur génération signal: {e}", exc_info=True)
-            return jsonify({'error': str(e)}), 500
-    
-    return jsonify(current_signal)
+    # Toujours générer un signal à la demande (plus fiable)
+    try:
+        # S'assurer qu'on a des données historiques
+        if not signal_generator.candles or len(signal_generator.candles) < 50:
+            candles = signal_generator.fetch_historical_candles(limit=200)
+            if candles:
+                signal_generator.candles = candles
+        
+        analysis = signal_generator.analyze()
+        if 'error' not in analysis:
+            current_signal = {
+                'signal': analysis.get('signal', 'NEUTRE'),
+                'signal_quality': analysis.get('signal_quality', 0),
+                'current_price': analysis.get('current_price', 0),
+                'coin': signal_generator.coin,
+                'indicators': analysis.get('indicators', {}),
+                'volume_ratio': analysis.get('volume_ratio', 0),
+                'timestamp': datetime.now().isoformat()
+            }
+            return jsonify(current_signal)
+        else:
+            # Retourner un signal NEUTRE en cas d'erreur plutôt qu'une erreur 500
+            return jsonify({
+                'signal': 'NEUTRE',
+                'signal_quality': 0,
+                'current_price': 0,
+                'coin': signal_generator.coin,
+                'error': analysis.get('error'),
+                'timestamp': datetime.now().isoformat()
+            }), 200
+    except Exception as e:
+        logger.error(f"Erreur génération signal: {e}", exc_info=True)
+        return jsonify({
+            'signal': 'NEUTRE',
+            'signal_quality': 0,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 200
 
 @app.route('/api/status')
 def get_status():
