@@ -409,8 +409,16 @@ class ScalpingBacktest:
         """
         logger.info(f"🚀 Démarrage du backtest pour {coin}")
         
-        # Charger les données
-        candles = self.load_historical_data(coin, interval="1m", days=30)
+        # Charger les données historiques (30 jours minimum)
+        try:
+            import config
+            interval = getattr(config, 'DEFAULT_INTERVAL', '5m')
+            days = 30  # 30 jours pour statistiques significatives
+        except:
+            interval = '5m'
+            days = 30
+        
+        candles = self.load_historical_data(coin, interval=interval, days=days)
         if not candles:
             return {'error': 'Impossible de charger les données'}
         
@@ -604,8 +612,8 @@ class ScalpingBacktest:
             print(f"  {reason}: {count} ({pct:.1f}%)")
         
         # Durée moyenne des pertes
-        avg_duration = sum(t['duration_min'] for t in losing_trades) / len(losing_trades)
-        print(f"\nDurée moyenne pertes : {avg_duration:.1f} min")
+        avg_duration_loss = sum(t['duration_min'] for t in losing_trades) / len(losing_trades)
+        print(f"\nDurée moyenne pertes : {avg_duration_loss:.1f} min")
         
         # Type de signal
         buy_losses = sum(1 for t in losing_trades if t['type'] in ['ACHAT', 'BUY'])
