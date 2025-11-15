@@ -522,19 +522,32 @@ class ScalpingBacktest:
                     # OPTIMISATION: Compter les raisons d'échec pour diagnostic
                     if 'filters_failed_reasons' not in stats:
                         stats['filters_failed_reasons'] = {}
-                    # Extraire la raison principale
-                    if 'volume' in reason.lower():
+                    # Extraire la raison principale (vérifier si les skips sont actifs)
+                    try:
+                        import config
+                        skip_volume = getattr(config, 'SKIP_VOLUME_FILTER', False)
+                        skip_atr = getattr(config, 'SKIP_ATR_FILTER', False)
+                    except:
+                        skip_volume = False
+                        skip_atr = False
+                    
+                    if 'volume' in reason.lower() and not skip_volume:
                         stats['filters_failed_reasons']['volume'] = stats['filters_failed_reasons'].get('volume', 0) + 1
                     elif 'spread' in reason.lower():
                         stats['filters_failed_reasons']['spread'] = stats['filters_failed_reasons'].get('spread', 0) + 1
-                    elif 'atr' in reason.lower():
+                    elif 'atr' in reason.lower() and not skip_atr:
                         stats['filters_failed_reasons']['atr'] = stats['filters_failed_reasons'].get('atr', 0) + 1
                     elif 'ema' in reason.lower():
                         stats['filters_failed_reasons']['ema'] = stats['filters_failed_reasons'].get('ema', 0) + 1
                     elif 'contexte' in reason.lower() or 'context' in reason.lower():
                         stats['filters_failed_reasons']['context'] = stats['filters_failed_reasons'].get('context', 0) + 1
+                    elif 'quality' in reason.lower():
+                        stats['filters_failed_reasons']['quality'] = stats['filters_failed_reasons'].get('quality', 0) + 1
                     else:
                         stats['filters_failed_reasons']['other'] = stats['filters_failed_reasons'].get('other', 0) + 1
+                        # Pour debug: afficher la raison complète pour les premiers échecs
+                        if stats['filters_failed'] <= 5:
+                            logger.debug(f"Raison échec filtre: {reason}")
                     continue
                 
                 # OPTIMISATION: Log seulement les signaux de haute qualité
@@ -795,29 +808,38 @@ class ScalpingBacktest:
     def _should_enter_trade(self, analysis: Dict) -> Tuple[bool, str]:
         """Vérifie si on doit entrer dans le trade selon les filtres"""
         try:
-            # Volume >150% moyenne
-            candles = analysis.get('candles', [])
-            if len(candles) >= 20:
-                recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
-                avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
-                if avg_volume > 0:
-                    volume_ratio = recent_volume / (avg_volume * 5)
-                    min_volume = getattr(config, 'MIN_VOLUME_MULTIPLIER', 1.5) if config else 1.5
-                    if volume_ratio < min_volume:
-                        return False, f"Volume insuffisant: {volume_ratio:.2f}x (min: {min_volume}x)"
-                # Si avg_volume == 0, on passe (pas de filtre volume)
+            import config
+            skip_volume = getattr(config, 'SKIP_VOLUME_FILTER', False)
+            skip_atr = getattr(config, 'SKIP_ATR_FILTER', False)
+        except:
+            skip_volume = False
+            skip_atr = False
+        
+        try:
+            # Volume >150% moyenne (sauf si skip activé)
+            if not skip_volume:
+                candles = analysis.get('candles', [])
+                if len(candles) >= 20:
+                    recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
+                    avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
+                    if avg_volume > 0:
+                        volume_ratio = recent_volume / (avg_volume * 5)
+                        min_volume = getattr(config, 'MIN_VOLUME_MULTIPLIER', 1.5) if config else 1.5
+                        if volume_ratio < min_volume:
+                            return False, f"Volume insuffisant: {volume_ratio:.2f}x (min: {min_volume}x)"
             
-            # ATR dans range acceptable
-            atr = analysis.get('indicators', {}).get('atr', 0)
-            current_price = analysis.get('current_price', 0)
-            if current_price > 0 and atr > 0:
-                atr_percent = (atr / current_price) * 100
-                atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.4) if config else 0.4
-                atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2) if config else 1.2
-                if atr_percent < atr_min:
-                    return False, f"ATR trop faible: {atr_percent:.2f}%"
-                if atr_percent > atr_max:
-                    return False, f"ATR trop élevé: {atr_percent:.2f}%"
+            # ATR dans range acceptable (sauf si skip activé)
+            if not skip_atr:
+                atr = analysis.get('indicators', {}).get('atr', 0)
+                current_price = analysis.get('current_price', 0)
+                if current_price > 0 and atr > 0:
+                    atr_percent = (atr / current_price) * 100
+                    atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.4) if config else 0.4
+                    atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2) if config else 1.2
+                    if atr_percent < atr_min:
+                        return False, f"ATR trop faible: {atr_percent:.2f}%"
+                    if atr_percent > atr_max:
+                        return False, f"ATR trop élevé: {atr_percent:.2f}%"
             
             # Spread <0.05%
             spread = analysis.get('spread', 0.1)
