@@ -406,15 +406,16 @@ class ScalpingBacktest:
             return {'error': f'Pas assez de données: {len(candles)} chandeliers'}
         
         # Initialiser le générateur de signaux
-        self.signal_generator = HyperliquidSignalGenerator(coin=coin, interval="1m")
-        self.signal_generator.candles = candles
-        
-        # Pour le backtest, utiliser un seuil modéré (65 pour générer des trades)
         try:
             import config
-            signal_threshold = signal_quality_threshold or 65  # 65 pour backtest (plus permissif que 75)
+            interval = getattr(config, 'DEFAULT_INTERVAL', '5m')
+            signal_threshold = signal_quality_threshold or getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 82)
         except:
-            signal_threshold = signal_quality_threshold or 65
+            interval = '5m'
+            signal_threshold = signal_quality_threshold or 82
+        
+        self.signal_generator = HyperliquidSignalGenerator(coin=coin, interval=interval)
+        self.signal_generator.candles = candles
         
         # Statistiques pour debug
         stats = {
@@ -455,20 +456,11 @@ class ScalpingBacktest:
                         logger.debug(f"Signal qualité insuffisant: {signal_quality:.1f} < {signal_threshold}")
                     continue
                 
-                # Vérifier les filtres d'entrée (assouplis pour backtest)
+                # Vérifier les filtres d'entrée (stricts)
                 should_enter, reason = self._should_enter_trade(analysis)
                 if not should_enter:
                     stats['filters_failed'] += 1
-                    # Pour backtest, assouplir certains filtres si qualité >70
-                    if signal_quality >= 70:
-                        # Ignorer filtres volume/spread si qualité élevée
-                        if 'volume' not in reason.lower() and 'spread' not in reason.lower():
-                            # Passer malgré autres filtres si qualité >70
-                            pass
-                        else:
-                            continue
-                    else:
-                        continue
+                    continue
                 
                 logger.info(f"✅ Signal {signal} détecté à l'index {i} | Qualité: {signal_quality:.1f}/100")
                 stats['positions_opened'] += 1
@@ -553,7 +545,60 @@ class ScalpingBacktest:
         # Afficher métriques détaillées
         self.print_detailed_metrics()
         
+        # Analyser les trades perdants
+        if self.closed_trades:
+            self.analyze_losing_trades()
+        
         return metrics
+    
+    def analyze_losing_trades(self):
+        """
+        Identifier pourquoi trades perdent
+        """
+        losing_trades = [t for t in self.closed_trades if t['pnl_net'] < 0]
+        
+        if not losing_trades:
+            print("\n✅ Aucun trade perdant à analyser")
+            return
+        
+        print("\n" + "="*60)
+        print("🔍 ANALYSE DES TRADES PERDANTS")
+        print("="*60)
+        
+        # Par raison de sortie
+        exit_reasons = {}
+        for trade in losing_trades:
+            reason = trade['exit_reason']
+            exit_reasons[reason] = exit_reasons.get(reason, 0) + 1
+        
+        print("\nRaisons de sortie :")
+        for reason, count in sorted(exit_reasons.items(), key=lambda x: -x[1]):
+            pct = count / len(losing_trades) * 100
+            print(f"  {reason}: {count} ({pct:.1f}%)")
+        
+        # Durée moyenne des pertes
+        avg_duration = sum(t['duration_min'] for t in losing_trades) / len(losing_trades)
+        print(f"\nDurée moyenne pertes : {avg_duration:.1f} min")
+        
+        # Type de signal
+        buy_losses = sum(1 for t in losing_trades if t['type'] in ['ACHAT', 'BUY'])
+        sell_losses = len(losing_trades) - buy_losses
+        print(f"\nBUY perdants : {buy_losses}")
+        print(f"SELL perdants : {sell_losses}")
+        
+        # Perte moyenne
+        avg_loss = sum(t['pnl_net'] for t in losing_trades) / len(losing_trades)
+        print(f"\nPerte moyenne : ${avg_loss:.2f}")
+        
+        # Analyse par durée
+        short_losses = [t for t in losing_trades if t['duration_min'] < 5]
+        medium_losses = [t for t in losing_trades if 5 <= t['duration_min'] < 15]
+        long_losses = [t for t in losing_trades if t['duration_min'] >= 15]
+        
+        print(f"\nPertes par durée :")
+        print(f"  <5 min: {len(short_losses)} ({len(short_losses)/len(losing_trades)*100:.1f}%)")
+        print(f"  5-15 min: {len(medium_losses)} ({len(medium_losses)/len(losing_trades)*100:.1f}%)")
+        print(f"  >15 min: {len(long_losses)} ({len(long_losses)/len(losing_trades)*100:.1f}%)")
     
     def _calculate_signal_quality(self, analysis: Dict) -> float:
         """
@@ -783,6 +828,96 @@ class ScalpingBacktest:
         print(f"  Profit Factor>1.2: {'✅' if profit_factor > 1.2 else '❌'} ({profit_factor:.2f})")
         print(f"  Drawdown <15%    : {'✅' if self.max_drawdown < 0.15 else '❌'} ({self.max_drawdown*100:.1f}%)")
         print(f"  Return >0%       : {'✅' if final_return > 0 else '❌'} ({final_return:+.1f}%)")
+    
+    def optimize_parameters(self, coin: str, param_ranges: Dict) -> Tuple[Optional[Dict], Optional[Dict], List]:
+        """
+        Grid search pour trouver meilleurs paramètres
+        
+        Args:
+            coin: Symbole de la crypto
+            param_ranges: Dict avec ranges de paramètres à tester
+        
+        Returns:
+            (best_params, best_metrics, all_results)
+        """
+        from itertools import product
+        
+        best_profit_factor = 0
+        best_params = None
+        best_metrics = None
+        
+        # Générer combinaisons
+        param_names = list(param_ranges.keys())
+        param_values = [param_ranges[k] for k in param_names]
+        
+        results = []
+        total_combinations = 1
+        for v in param_values:
+            total_combinations *= len(v)
+        
+        logger.info(f"🔍 Grid search: {total_combinations} combinaisons à tester...")
+        
+        for idx, values in enumerate(product(*param_values), 1):
+            params = dict(zip(param_names, values))
+            
+            logger.info(f"Test {idx}/{total_combinations}: {params}")
+            
+            # Appliquer paramètres temporairement
+            original_config = {}
+            try:
+                import config
+                for key, value in params.items():
+                    config_key = key.upper()
+                    if hasattr(config, config_key):
+                        original_config[config_key] = getattr(config, config_key)
+                        setattr(config, config_key, value)
+            except Exception as e:
+                logger.error(f"Erreur application paramètres: {e}")
+            
+            # Run backtest
+            self.reset()
+            metrics = self.run(coin=coin)
+            
+            # Restaurer config
+            try:
+                import config
+                for key, value in original_config.items():
+                    setattr(config, key, value)
+            except:
+                pass
+            
+            # Enregistrer
+            result = {
+                'params': params.copy(),
+                'winrate': metrics.get('winrate', 0),
+                'profit_factor': metrics.get('profit_factor', 0),
+                'roi': metrics.get('roi', 0),
+                'max_drawdown': metrics.get('max_drawdown', 0),
+                'total_trades': metrics.get('total_trades', 0)
+            }
+            results.append(result)
+            
+            # Meilleur ?
+            pf = metrics.get('profit_factor', 0)
+            wr = metrics.get('winrate', 0)
+            dd = metrics.get('max_drawdown', 0)
+            
+            if pf > best_profit_factor and wr > 45 and dd < 15:
+                best_profit_factor = pf
+                best_params = params
+                best_metrics = metrics
+        
+        return best_params, best_metrics, results
+    
+    def reset(self):
+        """Réinitialise le backtest pour un nouveau run"""
+        self.capital = self.initial_capital
+        self.equity = self.initial_capital
+        self.equity_curve = []
+        self.closed_trades = []
+        self.positions = {}
+        self.max_drawdown = 0.0
+        self.max_equity = self.initial_capital
     
     def generate_report(self, output_file: str = "backtest_report.html") -> str:
         """Génère un rapport HTML avec equity curve et métriques"""

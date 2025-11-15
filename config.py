@@ -14,7 +14,7 @@ MAX_RETRIES = 3
 
 # Configuration par défaut
 DEFAULT_COIN = "BTC"
-DEFAULT_INTERVAL = "1m"  # SCALPING: 1 minute
+DEFAULT_INTERVAL = "5m"  # OPTIMISÉ: 5m pour moins de noise
 DEFAULT_CANDLE_LIMIT = 200
 
 # Multi-timeframe pour scalping
@@ -24,14 +24,14 @@ MULTI_TIMEFRAME = ["1m", "5m", "15m"]  # 1m signal, 5m trend, 15m contexte
 SUPPORTED_INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
 
 # ============================================================================
-# INDICATEURS CONSERVATEURS
+# INDICATEURS OPTIMISÉS (périodes plus longues)
 # ============================================================================
-RSI_PERIOD = 9  # Plus conservateur que 7
-MACD_FAST = 8
-MACD_SLOW = 21
-MACD_SIGNAL = 5
-EMA_SHORT = 12  # Plus conservateur que 9
-EMA_LONG = 26   # Plus conservateur que 21
+RSI_PERIOD = 14  # Revenir à 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+EMA_SHORT = 20
+EMA_LONG = 50
 BOLLINGER_PERIOD = 20
 BOLLINGER_STD_DEV = 2
 ATR_PERIOD = 10
@@ -166,22 +166,23 @@ WALL_DETECTION_MULTIPLIER = 1.5  # Mur = 1.5x la moyenne
 WALL_DISTANCE_THRESHOLD = 0.01  # 1% du prix pour être considéré comme "proche"
 
 # ============================================================================
-# FILTRES D'ENTRÉE STRICTS
+# FILTRES D'ENTRÉE ULTRA-STRICTS
 # ============================================================================
-MIN_VOLUME_MULTIPLIER = 2.0  # Volume >200% moyenne 20 périodes (plus strict)
-MAX_SPREAD_PERCENT = 0.04  # Spread max 0.04% (plus strict)
+SIGNAL_QUALITY_THRESHOLD = 82  # Augmenter de 75 à 82
+MIN_SIGNAL_CONFLUENCE = 4  # Minimum 4 indicateurs alignés
+MIN_VOLUME_MULTIPLIER = 2.5  # Volume >250% moyenne 20 périodes
+MAX_SPREAD_PERCENT = 0.03  # Réduire de 0.04 à 0.03
 MIN_DISTANCE_SR_PERCENT = 0.3
-SIGNAL_QUALITY_THRESHOLD = 75  # Score qualité minimum 75/100 (plus strict)
 
-# ATR Range acceptable pour scalping
-ATR_MIN_PERCENT = 0.4  # ATR minimum 0.4% du prix
+# ATR Range acceptable (éviter extrêmes)
+ATR_MIN_PERCENT = 0.5  # ATR minimum 0.5% du prix
 ATR_MAX_PERCENT = 1.2  # ATR maximum 1.2% du prix
 
 # ============================================================================
-# MONEY MANAGEMENT CONSERVATEUR
+# MONEY MANAGEMENT ULTRA-CONSERVATEUR
 # ============================================================================
-MAX_POSITIONS = 2  # Maximum 2 positions simultanées (plus conservateur)
-RISK_PER_TRADE = 0.01  # 1% du capital par trade (plus conservateur)
+MAX_POSITIONS = 1  # Une seule position à la fois
+RISK_PER_TRADE = 0.008  # Réduire à 0.8%
 MAX_DAILY_DRAWDOWN = 0.03  # Arrêter trading si drawdown journalier >3%
 MAX_POSITION_HEAT = 0.05  # Heat max: 5% du capital
 MAX_POSITION_SIZE_PERCENT = 0.05  # Maximum 5% du capital par position
@@ -189,6 +190,18 @@ MAX_POSITION_SIZE_PERCENT = 0.05  # Maximum 5% du capital par position
 # Ajustement dynamique de la taille
 WINRATE_THRESHOLD_INCREASE = 0.60  # Augmenter taille si winrate >60% sur 20 trades
 CONSECUTIVE_LOSSES_REDUCE = 3  # Réduire taille après 3 pertes consécutives
+
+# ============================================================================
+# MARKET CONDITIONS FILTERS
+# ============================================================================
+AVOID_TRADING_HOURS = [(22, 24), (0, 2)]  # UTC - éviter heures creuses
+MIN_DAILY_VOLUME_USD = 50_000_000  # Volume min pour trader un coin
+MAX_CONSECUTIVE_LOSSES = 3  # Stop après 3 pertes consécutives
+COOLDOWN_AFTER_LOSS_MINUTES = 30  # Attendre 30 min après perte
+
+# TREND FILTER
+REQUIRE_TREND_ALIGNMENT = True  # Trader uniquement avec trend
+MIN_TREND_STRENGTH = 0.6  # EMA20/EMA50 ratio min
 
 # ============================================================================
 # ORDER BOOK PROFOND

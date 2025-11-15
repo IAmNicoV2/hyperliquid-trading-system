@@ -1559,12 +1559,41 @@ class HyperliquidSignalGenerator:
             'break_even': round(price * (1 + total_fees_percent) if signal == "ACHAT" else price * (1 - total_fees_percent), 2)
         }
     
+    def validate_signal_context(self, signal_type: str, rsi: float, ema20: float, ema50: float, 
+                                price: float, macd: Dict, stochastic: Dict, williams_r: float, 
+                                volume_ratio: float) -> Tuple[bool, Dict, str]:
+        """
+        Validation croisée pour éviter faux signaux
+        """
+        if signal_type == 'ACHAT' or signal_type == 'BUY':
+            # TOUS ces critères doivent être vrais pour un BUY valide
+            checks = {
+                'rsi_ok': rsi < 55,  # Pas suracheté
+                'trend_ok': price > ema50 or (ema20 > ema50),  # Trend haussier
+                'macd_ok': macd.get('histogram', 0) > -0.5,  # Pas trop baissier
+                'stochastic_ok': stochastic.get('%K', 50) < 75 if isinstance(stochastic, dict) else True,
+                'williams_ok': williams_r > -30,  # Pas suracheté
+                'volume_ok': volume_ratio >= 2.0
+            }
+        else:  # VENTE / SELL
+            checks = {
+                'rsi_ok': rsi > 45,
+                'trend_ok': price < ema50 or (ema20 < ema50),
+                'macd_ok': macd.get('histogram', 0) < 0.5,
+                'stochastic_ok': stochastic.get('%K', 50) > 25 if isinstance(stochastic, dict) else True,
+                'williams_ok': williams_r < -70,
+                'volume_ok': volume_ratio >= 2.0
+            }
+        
+        passed = sum(checks.values())
+        total = len(checks)
+        
+        # Au moins 5/6 critères doivent passer
+        return passed >= 5, checks, f"{passed}/{total}"
+    
     def should_enter_trade(self, analysis: Dict) -> Tuple[bool, str]:
         """
-        Vérifie si on doit entrer dans le trade selon les filtres stricts
-        
-        Returns:
-            (should_enter: bool, reason: str)
+        Filtres en 2 étapes : basique + validation contexte
         """
         try:
             import config
@@ -1585,129 +1614,188 @@ class HyperliquidSignalGenerator:
             if avg_volume > 0:
                 volume_ratio = recent_volume / (avg_volume * 5)
         
-        # Vérifier tous les filtres
-        checks = {
-            'quality': signal_quality >= getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 75),
-            'volume': volume_ratio >= getattr(config, 'MIN_VOLUME_MULTIPLIER', 2.0) if len(candles) >= 20 else True,
-            'spread': spread <= getattr(config, 'MAX_SPREAD_PERCENT', 0.04),
-            'atr_range': True
+        # ATR percent
+        atr_percent = (atr / current_price) if current_price > 0 and atr > 0 else 0
+        
+        # Signal type
+        signal = analysis.get('signal', 'NEUTRE')
+        signal_type = 'ACHAT' if signal == 'ACHAT' else 'VENTE'
+        
+        # Étape 1 : Filtres basiques
+        basic_checks = {
+            'quality': signal_quality >= getattr(config, 'SIGNAL_QUALITY_THRESHOLD', 82),
+            'volume': volume_ratio >= getattr(config, 'MIN_VOLUME_MULTIPLIER', 2.5) if len(candles) >= 20 else False,
+            'spread': spread <= getattr(config, 'MAX_SPREAD_PERCENT', 0.03),
+            'atr_range': 0.005 <= atr_percent <= 0.012 if atr_percent > 0 else False,
+            'no_position': True,
+            'capital_ok': True
         }
         
-        # ATR range
-        if current_price > 0 and atr > 0:
-            atr_percent = (atr / current_price) * 100
-            atr_min = getattr(config, 'ATR_MIN_PERCENT', 0.4)
-            atr_max = getattr(config, 'ATR_MAX_PERCENT', 1.2)
-            checks['atr_range'] = atr_min <= atr_percent <= atr_max
-        
-        # Distance S/R
-        key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
-        supports = key_levels.get('supports', [])
-        resistances = key_levels.get('resistances', [])
-        
-        min_distance = float('inf')
-        for support in supports:
-            if support > 0:
-                distance = abs(current_price - support) / current_price * 100
-                min_distance = min(min_distance, distance)
-        for resistance in resistances:
-            if resistance > 0:
-                distance = abs(current_price - resistance) / current_price * 100
-                min_distance = min(min_distance, distance)
-        
-        checks['sr_distance'] = True
-        if min_distance < float('inf'):
-            min_distance_sr = getattr(config, 'MIN_DISTANCE_SR_PERCENT', 0.3)
-            checks['sr_distance'] = min_distance >= min_distance_sr
-        
         # Vérifier position manager
-        checks['no_position'] = True
-        checks['capital_ok'] = True
         try:
             if hasattr(self, 'position_manager') and self.position_manager:
-                can_open, reason = self.position_manager.can_open_position(self.coin, 10000)  # Balance estimée
-                checks['no_position'] = can_open
-                checks['capital_ok'] = can_open
+                can_open, reason = self.position_manager.can_open_position(self.coin, 10000)
+                basic_checks['no_position'] = can_open
+                basic_checks['capital_ok'] = can_open
         except:
             pass
         
-        # Identifier les filtres échoués
-        failed_checks = [k for k, v in checks.items() if not v]
-        if failed_checks:
-            return False, f"Filtres échoués: {', '.join(failed_checks)}"
+        if not all(basic_checks.values()):
+            failed = [k for k, v in basic_checks.items() if not v]
+            return False, f"Filtres basiques échoués: {', '.join(failed)}"
+        
+        # Étape 2 : Validation contexte
+        indicators = analysis.get('indicators', {})
+        rsi = indicators.get('rsi', 50)
+        macd = indicators.get('macd', {'histogram': 0})
+        ema20 = indicators.get('ema20', 0)
+        ema50 = indicators.get('ema50', 0)
+        stochastic = indicators.get('stochastic', {})
+        williams_r = indicators.get('williams_r', -50)
+        
+        context_valid, context_checks, context_score = self.validate_signal_context(
+            signal_type, rsi, ema20, ema50, current_price, macd, 
+            stochastic, williams_r, volume_ratio
+        )
+        
+        if not context_valid:
+            return False, f"Validation contexte échouée: {context_score} - {context_checks}"
         
         return True, "OK"
     
     def _calculate_signal_quality(self, analysis: Dict) -> float:
         """
-        Calcule le score de qualité du signal (0-100)
-        Utilisé par should_enter_trade() et generate_advanced_trading_signal()
+        Calcule le score de qualité du signal (0-100) avec confluence renforcée
         """
-        score = 0.0
-        
-        # 1. Confluence d'indicateurs (20%)
         signal_details = analysis.get('signal_details', {})
         buy_signals = signal_details.get('buy_signals', 0)
         sell_signals = signal_details.get('sell_signals', 0)
-        total_signals = buy_signals + sell_signals
-        if total_signals > 0:
-            confluence_score = min(total_signals / 10.0, 1.0) * 20
-            score += confluence_score
         
-        # 2. Proximité support/résistance (25%)
+        indicators = analysis.get('indicators', {})
+        rsi = indicators.get('rsi', 50)
+        macd = indicators.get('macd', {'histogram': 0})
+        ema20 = indicators.get('ema20', 0)
+        ema50 = indicators.get('ema50', 0)
         current_price = analysis.get('current_price', 0)
-        key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
-        supports = key_levels.get('supports', [])
-        resistances = key_levels.get('resistances', [])
         
-        min_distance = float('inf')
-        for support in supports:
-            if support > 0:
-                distance = abs(current_price - support) / current_price * 100
-                min_distance = min(min_distance, distance)
-        for resistance in resistances:
-            if resistance > 0:
-                distance = abs(current_price - resistance) / current_price * 100
-                min_distance = min(min_distance, distance)
-        
-        if min_distance < float('inf'):
-            # Plus proche = meilleur score (max 0.5% = score 25)
-            sr_score = max(0, 25 - (min_distance * 50))
-            score += sr_score
-        
-        # 3. Volume relatif (15%)
+        # Volume ratio
         candles = analysis.get('candles', [])
+        volume_ratio = 0
         if len(candles) >= 20:
             recent_volume = sum(c.get('volume', 0) for c in candles[-5:])
             avg_volume = sum(c.get('volume', 0) for c in candles[-20:]) / 20
             if avg_volume > 0:
                 volume_ratio = recent_volume / (avg_volume * 5)
-                volume_score = min(volume_ratio / 1.5, 1.0) * 15
-                score += volume_score
         
-        # 4. Spread bid/ask (10%)
+        # Spread
         spread = analysis.get('spread', 0.1)
-        if spread < 0.05:
-            spread_score = 10
-        elif spread < 0.1:
-            spread_score = 5
-        else:
-            spread_score = 0
-        score += spread_score
+        spread_percent = spread
         
-        # 5. Momentum short-term (15%)
-        momentum = analysis.get('advanced_analysis', {}).get('momentum', {})
-        momentum_percent = abs(momentum.get('momentum_percent', 0))
-        momentum_score = min(momentum_percent / 2.0, 1.0) * 15
-        score += momentum_score
+        # ATR percent
+        atr = indicators.get('atr', 0)
+        atr_percent = (atr / current_price) if current_price > 0 and atr > 0 else 0
         
-        # 6. Order book imbalance (15%)
+        # Order book imbalance
         order_book = analysis.get('advanced_analysis', {}).get('order_book', {})
-        imbalance = abs(order_book.get('order_book_imbalance', 0))
-        imbalance_score = min(imbalance / 20.0, 1.0) * 15
-        score += imbalance_score
+        order_book_imbalance = order_book.get('order_book_imbalance', 0)
         
-        return min(score, 100.0)
+        # Key levels
+        key_levels = analysis.get('advanced_analysis', {}).get('key_levels', {})
+        
+        return self.calculate_signal_quality_detailed(
+            buy_signals, sell_signals, rsi, macd, ema20, ema50, current_price,
+            volume_ratio, spread_percent, atr_percent, order_book_imbalance, key_levels
+        )
+    
+    def calculate_signal_quality_detailed(self, buy_signals, sell_signals, rsi, macd, ema20, ema50,
+                                          price, volume_ratio, spread_percent, atr_percent,
+                                          order_book_imbalance, key_levels):
+        """
+        Score 0-100 basé sur confluence + contexte de marché
+        """
+        score = 0
+        max_score = 100
+        
+        # 1. CONFLUENCE D'INDICATEURS (40 points)
+        signal_diff = abs(buy_signals - sell_signals)
+        if signal_diff >= 5:
+            score += 20
+        elif signal_diff >= 4:
+            score += 15
+        elif signal_diff >= 3:
+            score += 10
+        elif signal_diff >= 2:
+            score += 5
+        
+        # Trend alignment (EMA + MACD)
+        if buy_signals > sell_signals:
+            if price > ema20 > ema50 and macd.get('histogram', 0) > 0:
+                score += 20  # Trend confirmé
+            elif price > ema20:
+                score += 10
+        else:
+            if price < ema20 < ema50 and macd.get('histogram', 0) < 0:
+                score += 20
+            elif price < ema20:
+                score += 10
+        
+        # 2. VOLUME (15 points)
+        if volume_ratio >= 3.0:
+            score += 15
+        elif volume_ratio >= 2.5:
+            score += 10
+        elif volume_ratio >= 2.0:
+            score += 5
+        
+        # 3. SPREAD (10 points)
+        if spread_percent <= 0.02:
+            score += 10
+        elif spread_percent <= 0.03:
+            score += 5
+        
+        # 4. VOLATILITÉ (10 points)
+        if 0.005 <= atr_percent <= 0.01:  # Sweet spot
+            score += 10
+        elif 0.004 <= atr_percent <= 0.012:
+            score += 5
+        
+        # 5. ORDER BOOK (10 points)
+        if abs(order_book_imbalance) >= 20:
+            if (order_book_imbalance > 0 and buy_signals > sell_signals) or \
+               (order_book_imbalance < 0 and sell_signals > buy_signals):
+                score += 10
+        elif abs(order_book_imbalance) >= 15:
+            score += 5
+        
+        # 6. PROXIMITÉ SUPPORT/RÉSISTANCE (15 points)
+        supports = key_levels.get('supports', [])
+        resistances = key_levels.get('resistances', [])
+        
+        # Long près support
+        if buy_signals > sell_signals and supports:
+            for support in supports[:2]:
+                if support > 0:
+                    distance = abs(price - support) / price
+                    if distance <= 0.003:  # 0.3%
+                        score += 15
+                        break
+                    elif distance <= 0.005:
+                        score += 10
+                        break
+        
+        # Short près résistance
+        if sell_signals > buy_signals and resistances:
+            for resistance in resistances[:2]:
+                if resistance > 0:
+                    distance = abs(price - resistance) / price
+                    if distance <= 0.003:
+                        score += 15
+                        break
+                    elif distance <= 0.005:
+                        score += 10
+                        break
+        
+        return min(score, max_score)
     
     def generate_trading_signal(
         self,
