@@ -409,11 +409,13 @@ class ScalpingBacktest:
         """
         logger.info(f"🚀 Démarrage du backtest pour {coin}")
         
-        # Charger les données historiques (30 jours minimum)
+        # Charger les données historiques (30 jours minimum, ou moins si fast_mode)
         try:
             import config
             interval = getattr(config, 'DEFAULT_INTERVAL', '5m')
-            days = 30  # 30 jours pour statistiques significatives
+            # Vérifier si fast_mode est activé
+            fast_mode = getattr(config, 'BACKTEST_FAST_MODE', False)
+            days = 7 if fast_mode else 30  # 7 jours en mode rapide, 30 jours normalement
         except:
             interval = '5m'
             days = 30
@@ -462,16 +464,38 @@ class ScalpingBacktest:
         # Pour timeframe 5m, on a besoin de ~50 bougies (EMA50 nécessite 50)
         start_index = max(50, int(len(candles) * 0.05))  # Au moins 5% des données pour warm-up
         
-        logger.info(f"📊 Simulation de {len(candles)} chandeliers (démarrage à l'index {start_index})...")
+        # OPTIMISATION: Échantillonnage pour accélérer (traiter 1 chandelier sur N)
+        # Pour timeframe 5m, on peut sauter quelques chandeliers sans perdre trop de précision
+        sample_rate = 1  # Traiter tous les chandeliers par défaut
+        if len(candles) > 5000:
+            sample_rate = 2  # Traiter 1 sur 2 si >5000 chandeliers
+        if len(candles) > 10000:
+            sample_rate = 3  # Traiter 1 sur 3 si >10000 chandeliers
         
-        for i in range(start_index, len(candles)):
+        total_to_process = (len(candles) - start_index) // sample_rate
+        logger.info(f"📊 Simulation de {len(candles)} chandeliers (démarrage à l'index {start_index}, échantillonnage 1/{sample_rate}, {total_to_process} à traiter)...")
+        
+        # OPTIMISATION: Réduire les logs
+        log_interval = max(500, total_to_process // 20)  # Log tous les 5% de progression
+        
+        processed = 0
+        for i in range(start_index, len(candles), sample_rate):
             try:
-                # Mettre à jour les chandeliers
-                self.signal_generator.candles = candles[:i+1]
+                # OPTIMISATION: Ne mettre à jour que si nécessaire
+                # Utiliser une fenêtre glissante au lieu de recréer tout
+                window_size = min(200, i + 1)  # Garder seulement les 200 derniers chandeliers
+                window_start = max(0, i + 1 - window_size)
+                
+                self.signal_generator.candles = candles[window_start:i+1]
                 self.signal_generator.current_price = candles[i]['close']
                 
                 # Analyser
                 analysis = self.signal_generator.analyze()
+                
+                processed += 1
+                if processed % log_interval == 0:
+                    progress = (processed / total_to_process) * 100
+                    logger.info(f"   Progression: {progress:.1f}% ({processed}/{total_to_process})")
                 
                 if 'error' in analysis:
                     continue
@@ -497,7 +521,9 @@ class ScalpingBacktest:
                     stats['filters_failed'] += 1
                     continue
                 
-                logger.info(f"✅ Signal {signal} détecté à l'index {i} | Qualité: {signal_quality:.1f}/100")
+                # OPTIMISATION: Log seulement les signaux de haute qualité
+                if signal_quality >= 80:
+                    logger.info(f"✅ Signal {signal} détecté à l'index {i} | Qualité: {signal_quality:.1f}/100")
                 stats['positions_opened'] += 1
                 
                 # Vérifier si on peut ouvrir une position
