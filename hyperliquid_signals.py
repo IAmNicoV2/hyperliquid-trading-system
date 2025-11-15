@@ -1575,14 +1575,14 @@ class HyperliquidSignalGenerator:
                 'williams_ok': williams_r > -30,  # Pas suracheté
                 'volume_ok': volume_ratio >= 2.0
             }
-        else:  # VENTE / SELL
+        else:  # VENTE / SELL (critères renforcés pour améliorer performance)
             checks = {
-                'rsi_ok': rsi > 45,
-                'trend_ok': price < ema50 or (ema20 < ema50),
-                'macd_ok': macd.get('histogram', 0) < 0.5,
-                'stochastic_ok': stochastic.get('%K', 50) > 25 if isinstance(stochastic, dict) else True,
-                'williams_ok': williams_r < -70,
-                'volume_ok': volume_ratio >= 2.0
+                'rsi_ok': rsi > 50,  # Plus strict : >50 au lieu de >45
+                'trend_ok': price < ema50 and ema20 < ema50,  # Trend baissier confirmé (les deux EMA)
+                'macd_ok': macd.get('histogram', 0) < 0.0,  # MACD négatif (plus strict)
+                'stochastic_ok': stochastic.get('%K', 50) > 30 if isinstance(stochastic, dict) else True,  # Plus strict : >30 au lieu de >25
+                'williams_ok': williams_r < -75,  # Plus strict : <-75 au lieu de <-70
+                'volume_ok': volume_ratio >= 2.2  # Volume plus élevé pour SELL (2.2x au lieu de 2.0x)
             }
         
         passed = sum(checks.values())
